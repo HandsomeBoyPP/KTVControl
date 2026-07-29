@@ -1,0 +1,656 @@
+<!DOCTYPE html>
+
+<html lang="zh-CN">
+
+<head>
+
+<meta charset="UTF-8">
+
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<title>KTV 前台控制</title>
+
+<link rel="stylesheet" href="/static/style.css?v=7">
+
+</head>
+
+<body>
+
+
+
+<div class="layout">
+
+  <nav class="sidebar">
+  <div class="sidebar-brand">KTV Control</div>
+  <div class="sidebar-tabs">
+    <button class="tab-btn active" data-tab="rooms"><span class="tab-icon">&#9635;</span> 房间管理</button>
+    <button class="tab-btn" data-tab="members"><span class="tab-icon">&#9733;</span> 会员管理</button>
+
+    <div class="sidebar-section-title">收银记账</div>
+    <button class="tab-btn" data-tab="checkout"><span class="tab-icon">&#165;</span> 收银台</button>
+    <button class="tab-btn" data-tab="reports"><span class="tab-icon">&#9638;</span> 营业报表</button>
+    <button class="tab-btn" data-tab="history"><span class="tab-icon">&#9776;</span> 结账记录</button>
+
+    <div class="sidebar-section-title">管理</div>
+    <button class="tab-btn" data-tab="packages"><span class="tab-icon">&#9636;</span> 套餐管理</button>
+    <button class="tab-btn" data-tab="inventory"><span class="tab-icon">&#9635;</span> 库存管理</button>
+    <button class="tab-btn" data-tab="staff"><span class="tab-icon">&#9823;</span> 店内人员管理</button>
+
+    <div class="sidebar-section-title">系统</div>
+    <button class="tab-btn" data-tab="logs"><span class="tab-icon">&#9776;</span> 操作日志</button>
+  </div>
+  <div class="sidebar-footer">
+    <span class="clock" id="clock">--</span>
+    <span class="status-dot" id="serverStatus" title="服务器状态"></span>
+  </div>
+</nav>
+
+<main class="content">
+  <section class="tab-panel active" id="tab-rooms">
+    <div class="section-header"><h2>房间管理</h2></div>
+    <div class="rooms-notice" id="roomsNotice" style="display:none;"></div>
+    <div class="power-strip" id="powerStrip"></div>
+    <div class="rooms-grid" id="roomsGrid"></div>
+    <div class="bookings-section">
+      <div class="section-header">
+        <h2>包厢预订</h2>
+        <button class="btn btn-sm btn-accent" onclick="showBookingModal()">+ 新建预订</button>
+      </div>
+      <div class="bookings-list" id="bookingsList"><p class="empty-hint">暂无预订</p></div>
+    </div>
+  </section>
+
+  <section class="tab-panel" id="tab-members">
+    <div class="section-header">
+      <h2>会员列表</h2>
+      <button class="btn btn-sm btn-accent" onclick="showMemberModal()">+ 新增会员</button>
+    </div>
+    <div class="table-wrap">
+      <table class="data-table" id="membersTable">
+        <thead><tr><th>姓名</th><th>手机号</th><th>余额</th><th>创建时间</th><th>操作</th></tr></thead>
+        <tbody><tr><td colspan="5" class="empty-hint">暂无会员数据</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="tab-panel" id="tab-checkout">
+    <div class="section-header"><h2>收银台 · 当前开台账单</h2></div>
+    <div class="table-wrap" style="margin-bottom:20px;">
+      <table class="data-table" id="billingTable">
+        <thead><tr><th>房间</th><th>时长(min)</th><th>酒水费</th><th>客户类型</th><th>操作</th></tr></thead>
+        <tbody><tr><td colspan="5" class="empty-hint">暂无开台账单</td></tr></tbody>
+      </table>
+    </div>
+    <div class="card" id="settleCard" style="display:none;">
+      <h3>结账 - <span id="settleRoomLabel">--</span></h3>
+      <div class="form-group"><label>选择套餐</label><select id="settlePackage" onchange="updateSettleTotal()"></select></div>
+      <div class="settle-grid">
+        <div><label>套餐费</label><span id="settleRoomFee">0</span></div>
+        <div><label>酒水小吃</label><span id="settleDrinksFee">0</span></div>
+        <div><label>总计</label><span id="settleTotal" style="font-size:24px;color:var(--accent);">0</span></div>
+      </div>
+      <div style="margin:12px 0;padding:10px;background:rgba(0,0,0,0.15);border-radius:8px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <h4 style="color:var(--text-dim);margin:0;">酒水小吃明细</h4>
+          <button class="btn btn-xs btn-outline" onclick="showDrinksModal()">编辑明细</button>
+        </div>
+        <div id="settleDrinksSummary" style="font-size:13px;color:var(--text-dim);margin-top:8px;">暂无</div>
+      </div>
+      <div class="form-group"><label>优惠金额 (最多<span id="maxDiscount">0</span>)</label><input type="number" id="settleDiscount" value="0" min="0" step="0.01" style="width:120px;" oninput="updateSettleTotal()"></div>
+      <div class="form-group"><label>支付方式</label>
+        <select id="settlePayment" onchange="onSettlePaymentChange()"><option value="现金">现金</option><option value="微信">微信</option><option value="支付宝">支付宝</option><option value="会员余额">会员余额</option></select>
+      </div>
+      <div id="memberSettleInfo" style="display:none;">
+        <div class="form-group"><label>会员手机号</label><div style="display:flex;gap:8px;"><input type="text" id="settleMemberPhone" style="flex:1;"><button class="btn btn-xs btn-outline" onclick="lookupSettleMember()" style="white-space:nowrap;">查询</button></div></div>
+        <div class="form-group"><label>会员密码</label><input type="password" id="settleMemberPassword"></div>
+        <div id="settleMemberLabel" style="font-size:13px;color:var(--accent);margin-bottom:8px;"></div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-outline" onclick="saveSettlementDraft()">&#20445;&#23384;</button>
+        <button class="btn btn-secondary" onclick="hideSettle()">取消</button>
+        <button class="btn btn-primary" onclick="confirmSettle()">确认结算</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="tab-panel" id="tab-reports">
+    <div class="section-header"><h2>营业报表</h2></div>
+    <div class="placeholder-tab report-placeholder">
+      <div>
+        <div class="placeholder-icon">&#9638;</div>
+        <h3>营业报表</h3>
+        <p>后续统一提供日报、周报、月报和年报。</p>
+        <div class="report-tags"><span>日报</span><span>周报</span><span>月报</span><span>年报</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="tab-panel" id="tab-history">
+    <div class="section-header"><h2>结账记录</h2><button class="btn btn-sm btn-secondary" onclick="fetchBillingHistory()">刷新</button></div>
+    <div class="table-wrap">
+      <table class="data-table" id="historyTable">
+        <thead><tr><th>房间</th><th>套餐费</th><th>酒水费</th><th>总计</th><th>支付方式</th><th>结账会员</th><th>结账时间</th><th class="del-col" style="display:none;">操作</th></tr></thead>
+        <tbody><tr><td colspan="8" class="empty-hint">暂无记录</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="tab-panel" id="tab-packages">
+    <div class="section-header">
+      <h2 id="pkgTypeLabel">开台套餐</h2>
+      <div style="display:flex;gap:8px;">
+        <select id="pkgTypeFilter" onchange="onPkgTypeChange()"><option value="open">开台套餐</option><option value="extend">续时套餐</option></select>
+        <button class="btn btn-sm btn-accent" onclick="showPackageModal()">+ 新增套餐</button>
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table class="data-table" id="packagesTable">
+        <thead><tr><th>名称</th><th>时长(min)</th><th>零售价</th><th>操作</th></tr></thead>
+        <tbody><tr><td colspan="4" class="empty-hint">暂无套餐</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="tab-panel" id="tab-inventory">
+    <div class="section-header">
+      <h2>库存物品</h2>
+      <button class="btn btn-sm btn-accent" onclick="showInventoryModal()">+ 新增物品</button>
+    </div>
+    <div class="table-wrap">
+      <table class="data-table" id="inventoryTable">
+        <thead><tr><th>&#20998;&#31867;</th><th>&#21517;&#31216;</th><th>&#21806;&#20215;</th><th class="admin-only" style="display:none;">&#25104;&#26412;</th><th>&#24211;&#23384;</th><th>&#25805;&#20316;</th></tr></thead>
+        <tbody><tr><td colspan="6" class="empty-hint">&#26242;&#26080;&#24211;&#23384;</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="tab-panel" id="tab-staff">
+    <div class="section-header">
+      <div><h2>店内人员</h2><p class="section-note">仅用于人员资料管理，不参与系统登录和权限。</p></div>
+      <button class="btn btn-sm btn-accent" onclick="showStaffModal()">+ 新增人员</button>
+    </div>
+    <div class="table-wrap">
+      <table class="data-table" id="staffTable">
+        <thead><tr><th>&#22995;&#21517;</th><th>&#25163;&#26426;&#21495;</th><th>&#23703;&#20301;</th><th>&#29366;&#24577;</th><th class="admin-only" style="display:none;">&#24037;&#36164;</th><th>&#22791;&#27880;</th><th>&#25805;&#20316;</th></tr></thead>
+        <tbody><tr><td colspan="7" class="empty-hint">&#26242;&#26080;&#24215;&#20869;&#20154;&#21592;</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="tab-panel" id="tab-logs">
+    <div class="section-header"><h2>操作日志</h2><button class="btn btn-sm btn-secondary" onclick="fetchOpLogs()">刷新</button></div>
+    <div class="table-wrap">
+      <table class="data-table" id="logsTable">
+        <thead><tr><th>时间</th><th>操作</th><th>房间</th><th>详情</th></tr></thead>
+        <tbody><tr><td colspan="4" class="empty-hint">暂无日志</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+
+</div>
+
+
+
+<!-- ================================================================
+
+     MODALS
+
+     ================================================================ -->
+
+
+
+<!-- Open Room Modal -->
+
+<div class="modal-overlay" id="openModal">
+
+  <div class="modal">
+
+    <h3>开台 - <span id="openRoomLabel">--</span></h3>
+
+    <div class="form-group"><label>时长</label>
+
+      <select id="openDuration" onchange="onOpenDurationChange()">
+
+        <option value="60">1 小时</option><option value="120">2 小时</option><option value="180">3 小时</option>
+
+        <option value="240">4 小时</option><option value="300">5 小时</option><option value="360">6 小时</option>
+
+        <option value="custom">自定义</option><option value="unlimited">永久</option>
+
+      </select>
+
+    </div>
+
+    <div class="custom-dur-row" id="openCustomDur" style="display:none;">
+
+      <div class="custom-dur-field"><input type="number" id="openHours" value="1" min="0" max="24"><span>小时</span></div>
+
+      <div class="custom-dur-field"><input type="number" id="openMins" value="30" min="0" max="59"><span>分钟</span></div>
+
+    </div>
+
+
+
+    <div class="modal-actions">
+
+      <button class="btn btn-secondary" onclick="closeModal('openModal')">取消</button>
+
+      <button class="btn btn-primary" id="confirmOpen">确认开台</button>
+
+    </div>
+
+  </div>
+
+</div>
+
+
+
+<!-- Extend Modal -->
+
+<div class="modal-overlay" id="extendModal">
+
+  <div class="modal">
+
+    <h3>续时 - <span id="extendRoomLabel">--</span></h3>
+
+    <div class="form-group"><label>时长</label>
+
+      <select id="extendDuration" onchange="onExtendDurationChange()">
+
+        <option value="30">+30 分钟</option><option value="60">+1 小时</option><option value="120">+2 小时</option>
+
+        <option value="180">+3 小时</option><option value="240">+4 小时</option>
+
+        <option value="300">+5 小时</option><option value="360">+6 小时</option>
+
+        <option value="custom">自定义</option>
+
+      </select>
+
+    </div>
+
+    <div class="custom-dur-row" id="extendCustomDur" style="display:none;">
+
+      <div class="custom-dur-field"><input type="number" id="extendHours" value="0" min="0" max="24"><span>小时</span></div>
+
+      <div class="custom-dur-field"><input type="number" id="extendMins" value="30" min="0" max="59"><span>分钟</span></div>
+
+    </div>
+
+    <div class="modal-actions">
+
+      <button class="btn btn-secondary" onclick="closeModal('extendModal')">取消</button>
+
+      <button class="btn btn-primary" id="confirmExtend">确认续时</button>
+
+    </div>
+
+  </div>
+
+</div>
+
+
+
+<!-- Booking Modal -->
+
+<div class="modal-overlay" id="bookingModal">
+
+  <div class="modal">
+
+    <h3>新建包厢预订</h3>
+
+    <div class="form-group"><label>房间</label><select id="bookingRoom"></select></div>
+
+    <div class="form-group"><label>开台时间</label><input type="datetime-local" id="bookingTime"></div>
+
+    <div class="form-group"><label>时长</label>
+
+      <select id="bookingDuration" onchange="onBookingDurationChange()">
+
+        <option value="60">1 小时</option><option value="120">2 小时</option><option value="180">3 小时</option>
+
+        <option value="custom">自定义</option><option value="unlimited">永久</option>
+
+      </select>
+
+    </div>
+
+    <div class="custom-dur-row" id="bookingCustomDur" style="display:none;">
+
+      <div class="custom-dur-field"><input type="number" id="bookingHours" value="1" min="0" max="24"><span>小时</span></div>
+
+      <div class="custom-dur-field"><input type="number" id="bookingMins" value="0" min="0" max="59"><span>分钟</span></div>
+
+    </div>
+
+    <div class="modal-actions">
+
+      <button class="btn btn-secondary" onclick="closeModal('bookingModal')">取消</button>
+
+      <button class="btn btn-primary" id="confirmBooking">确认预订</button>
+
+    </div>
+
+  </div>
+
+</div>
+
+
+
+<!-- Add Member Modal -->
+
+<div class="modal-overlay" id="memberModal">
+
+  <div class="modal">
+
+    <h3>新增会员</h3>
+
+    <div class="form-group"><label>姓名</label><input type="text" id="memberName"></div>
+
+    <div class="form-group"><label>手机号</label><input type="text" id="memberPhone"></div>
+
+
+
+    <p style="font-size:12px;color:var(--text-dim);margin-bottom:12px;">初始密码为手机号后 4 位</p>
+
+    <div class="modal-actions">
+
+      <button class="btn btn-secondary" onclick="closeModal('memberModal')">取消</button>
+
+      <button class="btn btn-primary" id="confirmMember">确认添加</button>
+
+    </div>
+
+  </div>
+
+</div>
+
+
+
+<!-- Edit Member Modal -->
+
+<div class="modal-overlay" id="editMemberModal">
+
+  <div class="modal">
+
+    <h3>编辑会员 - <span id="editMemberLabel">--</span></h3>
+
+    <div class="form-group"><label>姓名</label><input type="text" id="editMemberName"></div>
+    <div class="form-group"><label>手机号</label><input type="text" id="editMemberPhone"></div>
+    <div class="form-group admin-only" style="display:none;"><label>修改余额</label><input type="number" id="editMemberBalance" min="0" step="0.01"><small style="color:var(--warning);">仅在 Ctrl+/ 管理模式下显示</small></div>
+
+
+
+    <div class="modal-actions">
+
+      <button class="btn btn-secondary" onclick="closeModal('editMemberModal')">取消</button>
+
+      <button class="btn btn-primary" id="confirmEditMember">确认修改</button>
+
+    </div>
+
+  </div>
+
+</div>
+
+
+
+<!-- Reset Password Modal -->
+
+<div class="modal-overlay" id="resetPwdModal">
+
+  <div class="modal">
+
+    <h3>重置会员密码 - <span id="resetPwdLabel">--</span></h3>
+
+    <div class="form-group"><label>管理密码</label><input type="password" id="resetPwdAdmin"></div>
+
+    <div class="form-group"><label>新密码</label><input type="text" id="resetPwdNew"></div>
+
+    <div class="modal-actions">
+
+      <button class="btn btn-secondary" onclick="closeModal('resetPwdModal')">取消</button>
+
+      <button class="btn btn-primary" id="confirmResetPwd">确认重置</button>
+
+    </div>
+
+  </div>
+
+</div>
+
+
+
+<!-- Recharge Modal -->
+
+<div class="modal-overlay" id="rechargeModal">
+
+  <div class="modal">
+
+    <h3>会员充值 - <span id="rechargeMemberLabel">--</span></h3>
+
+    <div class="form-group"><label>金额</label><input type="number" id="rechargeAmount" min="0.01" step="0.01"></div>
+
+    <div class="form-group"><label>支付方式</label><select id="rechargeMethod"><option value="现金">现金</option><option value="微信">微信</option><option value="支付宝">支付宝</option></select></div>
+
+    <div class="modal-actions">
+
+      <button class="btn btn-secondary" onclick="closeModal('rechargeModal')">取消</button>
+
+      <button class="btn btn-primary" id="confirmRecharge">确认充值</button>
+
+    </div>
+
+  </div>
+
+</div>
+
+
+
+<!-- Package Modal -->
+
+<div class="modal-overlay" id="packageModal">
+
+  <div class="modal">
+
+    <h3 id="packageModalTitle">新增套餐</h3>
+
+    <input type="hidden" id="editPackageId">
+
+    <div class="form-group"><label>名称</label><input type="text" id="pkgName"></div>
+
+    <div class="form-group"><label>类型</label><select id="pkgType"><option value="open">开台套餐</option><option value="extend">续时套餐</option></select></div>
+
+    <div class="form-group"><label>时长(分钟)</label><input type="number" id="pkgDuration" value="180" min="1"></div>
+
+    <div class="price-grid">
+
+      <div class="form-group"><label>零售价</label><input type="number" id="pkgPriceNormal" value="0" step="0.01"></div>
+
+
+
+
+
+
+
+    </div>
+
+    <div class="modal-actions">
+
+      <button class="btn btn-secondary" onclick="closeModal('packageModal')">取消</button>
+
+      <button class="btn btn-primary" id="confirmPackage">确认</button>
+
+    </div>
+
+  </div>
+
+</div>
+
+
+
+<!-- Edit Price Modal -->
+
+<div class="modal-overlay" id="editPriceModal">
+
+  <div class="modal">
+
+    <h3>修改套餐价格 - 需要管理密码</h3>
+
+    <input type="hidden" id="editPricePkgId">
+
+    <div class="price-grid">
+
+      <div class="form-group"><label>零售价</label><input type="number" id="epPriceNormal" value="0" step="0.01"></div>
+
+
+
+
+
+
+
+    </div>
+
+    <div class="form-group"><label>管理密码</label><input type="password" id="epAdminPassword"></div>
+
+    <div class="modal-actions">
+
+      <button class="btn btn-secondary" onclick="closeModal('editPriceModal')">取消</button>
+
+      <button class="btn btn-primary" id="confirmEditPrice">确认修改</button>
+
+    </div>
+
+  </div>
+
+</div>
+
+
+
+<!-- Delete Package Modal -->
+
+<div class="modal-overlay" id="deletePkgModal">
+
+  <div class="modal">
+
+    <h3>删除套餐 - 需要管理密码</h3>
+
+    <p style="color:var(--danger);margin-bottom:12px;">确认删除套餐 "<span id="deletePkgName">--</span>"？</p>
+
+    <div class="form-group"><label>管理密码</label><input type="password" id="deletePkgPassword"></div>
+
+    <div class="modal-actions">
+
+      <button class="btn btn-secondary" onclick="closeModal('deletePkgModal')">取消</button>
+
+      <button class="btn btn-danger" id="confirmDeletePkg">确认删除</button>
+
+    </div>
+
+  </div>
+
+</div>
+
+
+
+<!-- Inventory Modal -->
+<div class="modal-overlay" id="inventoryModal">
+  <div class="modal">
+    <h3 id="inventoryModalTitle">&#26032;&#22686;&#24211;&#23384;&#29289;&#21697;</h3>
+    <input type="hidden" id="editInvId">
+    <div class="form-group"><label>&#20998;&#31867;</label><select id="invCategory"><option value="&#37202;&#27700;">&#37202;&#27700;</option><option value="&#38646;&#39135;">&#38646;&#39135;</option><option value="&#27700;&#26524;">&#27700;&#26524;</option></select></div>
+    <div class="form-group"><label>&#21517;&#31216;</label><input type="text" id="invName"></div>
+    <div class="form-group"><label>&#21806;&#20215;</label><input type="number" id="invPrice" value="0" min="0" step="0.01"></div>
+    <div class="form-group admin-only" style="display:none;"><label>&#25104;&#26412;</label><input type="number" id="invCostPrice" value="0" min="0" step="0.01"><small style="color:var(--text-dim);">Ctrl+/ &#26174;&#31034;&#25110;&#38544;&#34255;</small></div>
+    <div class="form-group"><label>&#24211;&#23384;&#37327;</label><input type="number" id="invStock" value="0" min="0"></div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" onclick="closeModal('inventoryModal')">&#21462;&#28040;</button>
+      <button class="btn btn-primary" id="confirmInventory">&#20445;&#23384;</button>
+    </div>
+  </div>
+</div>
+
+
+<!-- Staff Modal -->
+<div class="modal-overlay" id="staffModal">
+  <div class="modal">
+    <h3 id="staffModalTitle">&#26032;&#22686;&#24215;&#20869;&#20154;&#21592;</h3>
+    <input type="hidden" id="editStaffId">
+    <div class="form-group"><label>&#22995;&#21517;</label><input type="text" id="staffName"></div>
+    <div class="form-group"><label>&#25163;&#26426;&#21495;</label><input type="text" id="staffPhone"></div>
+    <div class="form-group"><label>&#23703;&#20301;</label><input type="text" id="staffPosition" value="&#21592;&#24037;" placeholder="&#20363;&#22914;&#65306;&#24215;&#38271;&#12289;&#25910;&#38134;&#21592;&#12289;&#26381;&#21153;&#21592;"></div>
+    <div class="form-group"><label>&#29366;&#24577;</label><select id="staffStatus"><option value="&#22312;&#32844;">&#22312;&#32844;</option><option value="&#31163;&#32844;">&#31163;&#32844;</option></select></div>
+    <div class="form-group admin-only" style="display:none;"><label>&#24037;&#36164;&#65288;&#20803;/&#26376;&#65289;</label><input type="number" id="staffSalary" value="0" min="0" step="0.01"><small style="color:var(--text-dim);">Ctrl+/ &#26174;&#31034;&#25110;&#38544;&#34255;</small></div>
+    <div class="form-group"><label>&#22791;&#27880;</label><input type="text" id="staffNotes" maxlength="200"></div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" onclick="closeModal('staffModal')">&#21462;&#28040;</button>
+      <button class="btn btn-primary" id="confirmStaff">&#20445;&#23384;</button>
+    </div>
+  </div>
+</div>
+<div class="modal-overlay" id="adminToolsModal">
+  <div class="modal">
+    <h3>&#39564;&#35777;&#31649;&#29702;&#23494;&#30721;</h3>
+    <p style="font-size:13px;color:var(--text-dim);margin-bottom:14px;">&#39564;&#35777;&#36890;&#36807;&#21518;&#26174;&#31034;&#20313;&#39069;&#12289;&#25104;&#26412;&#12289;&#24037;&#36164;&#21644;&#21024;&#38500;&#25353;&#38062;&#12290;</p>
+    <div class="form-group"><label>&#31649;&#29702;&#23494;&#30721;</label><input type="password" id="adminToolsPassword" autocomplete="current-password"></div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" onclick="closeModal('adminToolsModal')">&#21462;&#28040;</button>
+      <button class="btn btn-primary" id="confirmAdminTools">&#39564;&#35777;&#24182;&#26174;&#31034;</button>
+    </div>
+  </div>
+</div>
+<script src="/static/app.js?v=13"></script>
+
+
+
+<!-- Drinks Edit Modal -->
+
+<div class="modal-overlay" id="drinksModal">
+
+  <div class="modal" style="max-width:700px;min-width:600px;">
+
+    <h3>酒水小吃明细 - <span id="drinksRoomLabel">--</span></h3>
+
+    <div style="max-height:400px;overflow-y:auto;">
+
+      <table class="data-table" id="drinksEditTable">
+
+        <thead><tr><th>物品</th><th>单价</th><th>数量</th><th>小计</th><th>操作</th></tr></thead>
+
+        <tbody></tbody>
+
+      </table>
+
+    </div>
+
+    <div style="margin-top:12px;display:flex;gap:8px;align-items:center;">
+
+      <select id="newDrinkItem" style="flex:1;"></select>
+
+      <input type="number" id="newDrinkQty" value="1" min="0" style="width:60px;text-align:center;" placeholder="数量">
+
+
+
+      <button class="btn btn-sm btn-outline" onclick="addDrinkFromModal()">添加</button>
+
+    </div>
+
+    <div class="modal-actions">
+
+      <button class="btn btn-secondary" onclick="closeDrinksModal()">取消</button>
+
+      <button class="btn btn-primary" onclick="saveDrinksModal()">保存明细</button>
+
+    </div>
+
+  </div>
+
+</div>
+
+
+</body>
+
+</html>
+
+
