@@ -84,6 +84,7 @@
     <div class="card" id="settleCard" style="display:none;">
       <h3>结账 - <span id="settleRoomLabel">--</span></h3>
       <div class="form-group"><label>选择套餐</label><select id="settlePackage" onchange="updateSettleTotal()"></select></div>
+      <div id="settlePackageItems" style="font-size:13px;color:var(--text-dim);margin:-4px 0 10px;padding:8px;background:rgba(0,0,0,.12);border-radius:6px;">套餐内容：暂无</div>
       <div class="settle-grid">
         <div><label>套餐费</label><span id="settleRoomFee">0</span></div>
         <div><label>酒水小吃</label><span id="settleDrinksFee">0</span></div>
@@ -145,8 +146,8 @@
     </div>
     <div class="table-wrap">
       <table class="data-table" id="packagesTable">
-        <thead><tr><th>名称</th><th>时长(min)</th><th>零售价</th><th>操作</th></tr></thead>
-        <tbody><tr><td colspan="4" class="empty-hint">暂无套餐</td></tr></tbody>
+        <thead><tr><th>名称</th><th>时长(min)</th><th>套餐价</th><th>包含内容</th><th>操作</th></tr></thead>
+        <tbody><tr><td colspan="5" class="empty-hint">暂无套餐</td></tr></tbody>
       </table>
     </div>
   </section>
@@ -158,8 +159,8 @@
     </div>
     <div class="table-wrap">
       <table class="data-table" id="inventoryTable">
-        <thead><tr><th>&#20998;&#31867;</th><th>&#21517;&#31216;</th><th>&#21806;&#20215;</th><th class="admin-only" style="display:none;">&#25104;&#26412;</th><th>&#24211;&#23384;</th><th>&#25805;&#20316;</th></tr></thead>
-        <tbody><tr><td colspan="6" class="empty-hint">&#26242;&#26080;&#24211;&#23384;</td></tr></tbody>
+        <thead><tr><th>分类</th><th>名称</th><th>基础单位</th><th>单价</th><th>整箱规格</th><th>整箱价</th><th class="admin-only" style="display:none;">成本/基础单位</th><th>库存</th><th>操作</th></tr></thead>
+        <tbody><tr><td colspan="9" class="empty-hint">暂无库存</td></tr></tbody>
       </table>
     </div>
   </section>
@@ -404,7 +405,6 @@
 
     <h3>重置会员密码 - <span id="resetPwdLabel">--</span></h3>
 
-    <div class="form-group"><label>管理密码</label><input type="password" id="resetPwdAdmin"></div>
 
     <div class="form-group"><label>新密码</label><input type="text" id="resetPwdNew"></div>
 
@@ -447,86 +447,80 @@
 </div>
 
 
+<!-- Member Stored Drinks Modal -->
+<div class="modal-overlay" id="storedDrinksModal">
+  <div class="modal stored-drinks-modal">
+    <h3>会员存酒 - <span id="storedDrinksMemberLabel">--</span></h3>
+    <p class="section-note stored-drinks-note">手动登记，不联动门店库存和收银账单。每次存酒自登记起有效期 30 天。</p>
+
+    <div class="stored-drink-form">
+      <div class="form-group"><label>酒水名称</label><input type="text" id="storedDrinkName" list="storedDrinkOptions" maxlength="64" placeholder="选择或输入酒水"><datalist id="storedDrinkOptions"></datalist></div>
+      <div class="form-group"><label>状态</label><select id="storedDrinkKind" onchange="onStoredDrinkKindChange()"><option value="sealed">未开封</option><option value="opened">已开封</option></select></div>
+      <div class="form-group"><label>数量（瓶）</label><input type="number" id="storedDrinkQty" value="1" min="1" step="1"></div>
+      <div class="form-group" id="storedDrinkLevelGroup" style="display:none;"><label>剩余量</label><select id="storedDrinkLevel"><option value="接近整瓶">接近整瓶</option><option value="3/4">3/4</option><option value="1/2">1/2</option><option value="1/4">1/4</option></select></div>
+      <div class="form-group"><label>存放位置</label><input type="text" id="storedDrinkLocation" maxlength="64" placeholder="例如：酒柜 A-03"></div>
+      <div class="form-group stored-drink-notes"><label>备注</label><input type="text" id="storedDrinkNotes" maxlength="200" placeholder="可不填"></div>
+      <button class="btn btn-sm btn-accent stored-drink-submit" id="confirmStoreDrink">新增存酒</button>
+    </div>
+
+    <h4 class="stored-drink-title">当前存酒</h4>
+    <div class="table-wrap stored-drink-table-wrap">
+      <table class="data-table" id="storedDrinksTable">
+        <thead><tr><th>酒水</th><th>数量/剩余</th><th>位置</th><th>存酒时间</th><th>到期时间</th><th>操作</th></tr></thead>
+        <tbody><tr><td colspan="6" class="empty-hint">暂无存酒</td></tr></tbody>
+      </table>
+    </div>
+
+    <details class="stored-drink-history">
+      <summary>查看存取记录</summary>
+      <div class="table-wrap">
+        <table class="data-table" id="storedDrinkLogsTable">
+          <thead><tr><th>时间</th><th>操作</th><th>酒水</th><th>数量</th><th>变更</th><th>说明</th></tr></thead>
+          <tbody><tr><td colspan="6" class="empty-hint">暂无记录</td></tr></tbody>
+        </table>
+      </div>
+    </details>
+
+    <div class="modal-actions"><button class="btn btn-secondary" onclick="closeModal('storedDrinksModal')">关闭</button></div>
+  </div>
+</div>
 
 <!-- Package Modal -->
 
 <div class="modal-overlay" id="packageModal">
-
-  <div class="modal">
-
+  <div class="modal" style="max-width:720px;">
     <h3 id="packageModalTitle">新增套餐</h3>
-
     <input type="hidden" id="editPackageId">
-
-    <div class="form-group"><label>名称</label><input type="text" id="pkgName"></div>
-
-    <div class="form-group"><label>类型</label><select id="pkgType"><option value="open">开台套餐</option><option value="extend">续时套餐</option></select></div>
-
-    <div class="form-group"><label>时长(分钟)</label><input type="number" id="pkgDuration" value="180" min="1"></div>
-
-    <div class="price-grid">
-
-      <div class="form-group"><label>零售价</label><input type="number" id="pkgPriceNormal" value="0" step="0.01"></div>
-
-
-
-
-
-
-
+    <div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr;gap:10px;">
+      <div class="form-group"><label>名称</label><input type="text" id="pkgName"></div>
+      <div class="form-group"><label>类型</label><select id="pkgType"><option value="open">开台套餐</option><option value="extend">续时套餐</option></select></div>
+      <div class="form-group"><label>时长（分钟）</label><input type="number" id="pkgDuration" value="180" min="1"></div>
+      <div class="form-group"><label>套餐总价</label><input type="number" id="pkgPriceNormal" value="0" min="0" step="0.01"></div>
     </div>
-
+    <div style="margin-top:12px;padding:12px;background:rgba(0,0,0,.14);border-radius:8px;">
+      <h4 style="margin:0 0 8px;">套餐酒水 <small style="color:var(--text-dim);font-weight:400;">保存账单时联动扣库存</small></h4>
+      <div style="display:grid;grid-template-columns:1fr 90px auto;gap:8px;align-items:end;">
+        <div class="form-group" style="margin:0;"><label>酒水商品</label><select id="pkgDrinkInventory"></select></div>
+        <div class="form-group" style="margin:0;"><label>数量</label><input type="number" id="pkgDrinkQty" value="1" min="1"></div>
+        <button type="button" class="btn btn-sm btn-outline" onclick="addPackageDrinkItem()">添加酒水</button>
+      </div>
+      <div id="pkgDrinkList" style="margin-top:8px;font-size:13px;color:var(--text-dim);"></div>
+    </div>
+    <div style="margin-top:12px;padding:12px;background:rgba(0,0,0,.14);border-radius:8px;">
+      <h4 style="margin:0 0 8px;">套餐小吃 <small style="color:var(--text-dim);font-weight:400;">仅记录和展示，不扣库存</small></h4>
+      <div style="display:grid;grid-template-columns:1fr 90px auto;gap:8px;align-items:end;">
+        <div class="form-group" style="margin:0;"><label>小吃名称</label><input type="text" id="pkgSnackName" placeholder="例如：爆米花"></div>
+        <div class="form-group" style="margin:0;"><label>数量</label><input type="number" id="pkgSnackQty" value="1" min="1"></div>
+        <button type="button" class="btn btn-sm btn-outline" onclick="addPackageSnackItem()">添加小吃</button>
+      </div>
+      <div id="pkgSnackList" style="margin-top:8px;font-size:13px;color:var(--text-dim);"></div>
+    </div>
     <div class="modal-actions">
-
       <button class="btn btn-secondary" onclick="closeModal('packageModal')">取消</button>
-
-      <button class="btn btn-primary" id="confirmPackage">确认</button>
-
+      <button class="btn btn-primary" id="confirmPackage">保存套餐</button>
     </div>
-
   </div>
-
 </div>
-
-
-
-<!-- Edit Price Modal -->
-
-<div class="modal-overlay" id="editPriceModal">
-
-  <div class="modal">
-
-    <h3>修改套餐价格 - 需要管理密码</h3>
-
-    <input type="hidden" id="editPricePkgId">
-
-    <div class="price-grid">
-
-      <div class="form-group"><label>零售价</label><input type="number" id="epPriceNormal" value="0" step="0.01"></div>
-
-
-
-
-
-
-
-    </div>
-
-    <div class="form-group"><label>管理密码</label><input type="password" id="epAdminPassword"></div>
-
-    <div class="modal-actions">
-
-      <button class="btn btn-secondary" onclick="closeModal('editPriceModal')">取消</button>
-
-      <button class="btn btn-primary" id="confirmEditPrice">确认修改</button>
-
-    </div>
-
-  </div>
-
-</div>
-
-
 
 <!-- Delete Package Modal -->
 
@@ -556,21 +550,26 @@
 
 <!-- Inventory Modal -->
 <div class="modal-overlay" id="inventoryModal">
-  <div class="modal">
-    <h3 id="inventoryModalTitle">&#26032;&#22686;&#24211;&#23384;&#29289;&#21697;</h3>
+  <div class="modal" style="max-width:620px;">
+    <h3 id="inventoryModalTitle">新增库存物品</h3>
     <input type="hidden" id="editInvId">
-    <div class="form-group"><label>&#20998;&#31867;</label><select id="invCategory"><option value="&#37202;&#27700;">&#37202;&#27700;</option><option value="&#38646;&#39135;">&#38646;&#39135;</option><option value="&#27700;&#26524;">&#27700;&#26524;</option></select></div>
-    <div class="form-group"><label>&#21517;&#31216;</label><input type="text" id="invName"></div>
-    <div class="form-group"><label>&#21806;&#20215;</label><input type="number" id="invPrice" value="0" min="0" step="0.01"></div>
-    <div class="form-group admin-only" style="display:none;"><label>&#25104;&#26412;</label><input type="number" id="invCostPrice" value="0" min="0" step="0.01"><small style="color:var(--text-dim);">Ctrl+/ &#26174;&#31034;&#25110;&#38544;&#34255;</small></div>
-    <div class="form-group"><label>&#24211;&#23384;&#37327;</label><input type="number" id="invStock" value="0" min="0"></div>
+    <div class="form-group"><label>分类</label><select id="invCategory"><option value="酒水">酒水</option><option value="零食">零食</option><option value="水果">水果</option></select></div>
+    <div class="form-group"><label>名称</label><input type="text" id="invName" placeholder="例如：百威"></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+      <div class="form-group"><label>基础单位</label><input type="text" id="invUnitName" value="瓶" maxlength="8" placeholder="瓶、罐、份"></div>
+      <div class="form-group"><label>单价（元/基础单位）</label><input type="number" id="invPrice" value="0" min="0" step="0.01"></div>
+      <div class="form-group"><label>每箱数量</label><input type="number" id="invCaseSize" value="0" min="0"><small style="color:var(--text-dim);">不按箱销售填0</small></div>
+      <div class="form-group"><label>整箱售价（元）</label><input type="number" id="invCasePrice" value="0" min="0" step="0.01"></div>
+      <div class="form-group"><label>库存总数（按基础单位）</label><input type="number" id="invStock" value="0" min="0"><small style="color:var(--text-dim);">例如5箱×24瓶，应填写120</small></div>
+      <div class="form-group"><label>低库存提醒值</label><input type="number" id="invLowStock" value="5" min="0"></div>
+    </div>
+    <div class="form-group admin-only" style="display:none;"><label>成本（元/基础单位）</label><input type="number" id="invCostPrice" value="0" min="0" step="0.01"><small style="color:var(--text-dim);">Ctrl+/ 显示或隐藏</small></div>
     <div class="modal-actions">
-      <button class="btn btn-secondary" onclick="closeModal('inventoryModal')">&#21462;&#28040;</button>
-      <button class="btn btn-primary" id="confirmInventory">&#20445;&#23384;</button>
+      <button class="btn btn-secondary" onclick="closeModal('inventoryModal')">取消</button>
+      <button class="btn btn-primary" id="confirmInventory">保存</button>
     </div>
   </div>
 </div>
-
 
 <!-- Staff Modal -->
 <div class="modal-overlay" id="staffModal">
@@ -600,54 +599,33 @@
     </div>
   </div>
 </div>
-<script src="/static/app.js?v=13"></script>
+<script src="/static/app.js?v=16"></script>
 
 
 
 <!-- Drinks Edit Modal -->
-
 <div class="modal-overlay" id="drinksModal">
-
-  <div class="modal" style="max-width:700px;min-width:600px;">
-
+  <div class="modal" style="max-width:760px;min-width:640px;">
     <h3>酒水小吃明细 - <span id="drinksRoomLabel">--</span></h3>
-
     <div style="max-height:400px;overflow-y:auto;">
-
       <table class="data-table" id="drinksEditTable">
-
-        <thead><tr><th>物品</th><th>单价</th><th>数量</th><th>小计</th><th>操作</th></tr></thead>
-
+        <thead><tr><th>物品</th><th>规格</th><th>销售单价</th><th>数量</th><th>小计</th><th>实际扣库</th><th>操作</th></tr></thead>
         <tbody></tbody>
-
       </table>
-
     </div>
-
-    <div style="margin-top:12px;display:flex;gap:8px;align-items:center;">
-
-      <select id="newDrinkItem" style="flex:1;"></select>
-
-      <input type="number" id="newDrinkQty" value="1" min="0" style="width:60px;text-align:center;" placeholder="数量">
-
-
-
+    <div style="margin-top:12px;display:grid;grid-template-columns:minmax(220px,1fr) 130px 80px auto;gap:8px;align-items:end;">
+      <div class="form-group" style="margin:0;"><label>物品</label><select id="newDrinkItem" onchange="onNewDrinkItemChange()"></select></div>
+      <div class="form-group" style="margin:0;"><label>销售规格</label><select id="newDrinkSaleUnit" onchange="updateNewDrinkHint()"></select></div>
+      <div class="form-group" style="margin:0;"><label>数量</label><input type="number" id="newDrinkQty" value="1" min="1" style="text-align:center;" oninput="updateNewDrinkHint()"></div>
       <button class="btn btn-sm btn-outline" onclick="addDrinkFromModal()">添加</button>
-
     </div>
-
+    <div id="newDrinkHint" style="font-size:12px;color:var(--text-dim);margin-top:8px;"></div>
     <div class="modal-actions">
-
       <button class="btn btn-secondary" onclick="closeDrinksModal()">取消</button>
-
       <button class="btn btn-primary" onclick="saveDrinksModal()">保存明细</button>
-
     </div>
-
   </div>
-
 </div>
-
 
 </body>
 

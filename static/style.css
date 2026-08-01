@@ -559,3 +559,34 @@ body {
   font-size: 13px;
 }
 .room-load-error { grid-column: 1 / -1; padding: 48px 20px; text-align: center; }
+/* ---- Member stored drinks ---- */
+.stored-drinks-modal { max-width: 980px; width: min(94vw, 980px); }
+.stored-drinks-note { margin: -8px 0 16px; color: var(--warning); }
+.stored-drink-form {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.5fr) 110px 100px 120px minmax(150px, 1fr);
+  gap: 10px;
+  align-items: end;
+  padding: 12px;
+  background: rgba(0,0,0,.14);
+  border-radius: 8px;
+}
+.stored-drink-form .form-group { margin: 0; }
+.stored-drink-notes { grid-column: 1 / -2; }
+.stored-drink-submit { align-self: end; height: 38px; }
+.stored-drink-title { margin: 18px 0 8px; }
+.stored-drink-table-wrap { max-height: 290px; overflow: auto; }
+.stored-drink-history { margin-top: 14px; }
+.stored-drink-history summary { cursor: pointer; color: var(--accent); margin-bottom: 8px; }
+.stored-drink-history[open] .table-wrap { max-height: 220px; overflow: auto; }
+.storage-expiry { display: inline-block; margin-top: 3px; color: var(--success); font-size: 11px; }
+.storage-expiry.expired { color: var(--danger); font-weight: 700; }
+.stored-drink-expired { background: rgba(231,76,60,.07); }
+.cell-note { margin-top: 3px; color: var(--text-dim); font-size: 11px; }
+.cell-time { white-space: nowrap; font-size: 12px; color: var(--text-dim); }
+
+@media (max-width: 900px) {
+  .stored-drink-form { grid-template-columns: 1fr 1fr; }
+  .stored-drink-notes { grid-column: 1 / -1; }
+  .stored-drink-submit { grid-column: 1 / -1; }
+}

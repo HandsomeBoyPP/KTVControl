@@ -63,7 +63,6 @@ class UpdateMemberRequest(RequestModel):
 
 
 class ResetMemberPasswordRequest(RequestModel):
-    admin_password: str
     new_password: str = Field(min_length=4, max_length=64)
 
 
@@ -71,15 +70,49 @@ class RechargeRequest(RequestModel):
     amount: float = Field(gt=0)
     payment_method: Literal["现金", "微信", "支付宝"] = "现金"
 
+class StoreMemberDrinkRequest(RequestModel):
+    item_name: str = Field(min_length=1, max_length=64)
+    storage_kind: Literal["sealed", "opened"] = "sealed"
+    quantity: int = Field(default=1, gt=0)
+    remaining_level: Literal["1/4", "1/2", "3/4", "接近整瓶"] | None = None
+    storage_location: str | None = Field(default=None, max_length=64)
+    notes: str | None = Field(default=None, max_length=200)
+
+    @model_validator(mode="after")
+    def validate_opened_drink(self) -> Self:
+        if self.storage_kind == "opened":
+            if self.quantity != 1:
+                raise ValueError("已开封酒每条记录数量只能为 1")
+            if self.remaining_level is None:
+                raise ValueError("已开封酒必须选择剩余量")
+        return self
+
+
+class RetrieveMemberDrinkRequest(RequestModel):
+    quantity: int = Field(default=1, gt=0)
+    notes: str | None = Field(default=None, max_length=200)
+
+class PackageItemRequest(RequestModel):
+    item_type: Literal["drink", "snack"]
+    inventory_id: int | None = Field(default=None, gt=0)
+    item_name: str | None = Field(default=None, max_length=64)
+    qty: int = Field(default=1, gt=0)
+
+    @model_validator(mode="after")
+    def validate_package_item(self) -> Self:
+        if self.item_type == "drink" and self.inventory_id is None:
+            raise ValueError("套餐酒水必须选择库存商品")
+        if self.item_type == "snack" and not (self.item_name or "").strip():
+            raise ValueError("套餐小吃必须填写名称")
+        return self
+
 
 class CreatePackageRequest(RequestModel):
     name: str = Field(min_length=1, max_length=64)
     type: Literal["open", "extend"] = "open"
     duration_minutes: int = Field(gt=0)
     price_normal: float = Field(default=0, ge=0)
-
-
-
+    items: list[PackageItemRequest] = Field(default_factory=list, max_length=50)
 
 
 class UpdatePackageRequest(RequestModel):
@@ -87,32 +120,35 @@ class UpdatePackageRequest(RequestModel):
     type: Literal["open", "extend"] | None = None
     duration_minutes: int | None = Field(default=None, gt=0)
     price_normal: float | None = Field(default=None, ge=0)
-
-
-
-    admin_password: str
+    items: list[PackageItemRequest] | None = Field(default=None, max_length=50)
 
 
 class DeletePackageRequest(RequestModel):
     admin_password: str
 
-
 class CreateInventoryRequest(RequestModel):
     category: Literal["酒水", "零食", "水果"] = "酒水"
     name: str = Field(min_length=1, max_length=64)
+    unit_name: str = Field(default="瓶", min_length=1, max_length=8)
     unit_price: float = Field(default=0, ge=0)
+    case_size: int = Field(default=0, ge=0)
+    case_price: float = Field(default=0, ge=0)
     cost_price: float = Field(default=0, ge=0)
     stock: int = Field(default=0, ge=0)
+    low_stock: int = Field(default=5, ge=0)
 
 
 class UpdateInventoryRequest(RequestModel):
     category: Literal["酒水", "零食", "水果"] | None = None
     name: str | None = Field(default=None, min_length=1, max_length=64)
+    unit_name: str | None = Field(default=None, min_length=1, max_length=8)
     unit_price: float | None = Field(default=None, ge=0)
+    case_size: int | None = Field(default=None, ge=0)
+    case_price: float | None = Field(default=None, ge=0)
     cost_price: float | None = Field(default=None, ge=0)
     stock: int | None = Field(default=None, ge=0)
+    low_stock: int | None = Field(default=None, ge=0)
     admin_password: str | None = None
-
 
 class CreateStaffRequest(RequestModel):
     name: str = Field(min_length=1, max_length=64)
@@ -133,10 +169,9 @@ class UpdateStaffRequest(RequestModel):
 
 class AddDrinkRequest(RequestModel):
     billing_id: int = Field(gt=0)
-    item_name: str = Field(min_length=1, max_length=64)
+    inventory_id: int = Field(gt=0)
+    sale_unit: Literal["unit", "case"] = "unit"
     qty: int = Field(default=1, gt=0)
-    unit_price: float | None = Field(default=None, ge=0)
-
 
 class UpdateBillingRequest(RequestModel):
     duration_minutes: int | None = Field(default=None, ge=0)

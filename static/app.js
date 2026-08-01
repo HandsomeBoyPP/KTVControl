@@ -67,6 +67,8 @@ const API = {
 
 
 let roomsData=[], membersData=[], packagesData=[], inventoryData=[], staffData=[], activeBillingData=[];
+let editingPackageItems=[];
+let currentStoredDrinkMember=null, memberStoredDrinksData=[];
 
 
 
@@ -150,13 +152,14 @@ document.addEventListener("DOMContentLoaded", () => {
 
   document.getElementById("confirmResetPwd")?.addEventListener("click", confirmResetPwd);
 
+  document.getElementById("confirmStoreDrink")?.addEventListener("click", confirmStoreDrink);
+
 
 
   document.getElementById("confirmPackage")?.addEventListener("click", confirmPackage);
 
 
 
-  document.getElementById("confirmEditPrice")?.addEventListener("click", confirmEditPrice);
 
 
 
@@ -286,7 +289,7 @@ function switchTab(tab){
   }else if(tab==="checkout"){
     fetchActiveBilling();fetchInventory();fetchPackages();addPolling(fetchActiveBilling,10000);
   }else if(tab==="packages"){
-    fetchPackages();
+    fetchPackages();fetchInventory();
   }else if(tab==="inventory"){
     fetchInventory();
   }else if(tab==="staff"){
@@ -717,9 +720,119 @@ async function fetchMembers(){try{const r=await fetch(API.members);const j=await
 
 
 
-function renderMembers(){const tb=document.querySelector("#membersTable tbody");if(!membersData.length){tb.innerHTML='<tr><td colspan="5" class="empty-hint">暂无会员数据</td></tr>';return;}tb.innerHTML=membersData.map(m=>{const cr=m.created_at?m.created_at.replace("T"," ").substring(0,19):"-";return '<tr><td>'+m.name+'</td><td>'+m.phone+'</td><td>'+m.balance.toFixed(2)+'</td><td style="font-size:12px;color:var(--text-dim);">'+cr+'</td><td><button class="btn btn-xs btn-accent" onclick="showRechargeModal('+m.id+',\''+m.name+'\')">充值</button> <button class="btn btn-xs btn-outline" onclick="showEditMemberModal('+m.id+')">编辑</button> <button class="btn btn-xs btn-secondary" onclick="showResetPwdModal('+m.id+',\''+m.name+'\')">重置密码</button></td></tr>';}).join("");}
+function renderMembers(){
+  const tb=document.querySelector("#membersTable tbody");
+  if(!membersData.length){tb.innerHTML='<tr><td colspan="5" class="empty-hint">暂无会员数据</td></tr>';return;}
+  tb.innerHTML=membersData.map(m=>{
+    const cr=m.created_at?m.created_at.replace("T"," ").substring(0,19):"-";
+    return '<tr><td>'+escapeHtml(m.name)+'</td><td>'+escapeHtml(m.phone)+'</td><td>'+Number(m.balance||0).toFixed(2)+'</td><td style="font-size:12px;color:var(--text-dim);">'+cr+'</td><td><button class="btn btn-xs btn-accent" onclick="showRechargeModal('+m.id+')">充值</button> <button class="btn btn-xs btn-outline" onclick="showStoredDrinksModal('+m.id+')">存酒</button> <button class="btn btn-xs btn-outline" onclick="showEditMemberModal('+m.id+')">编辑</button> <button class="btn btn-xs btn-secondary" onclick="showResetPwdModal('+m.id+')">重置密码</button></td></tr>';
+  }).join("");
+}
 
+function escapeHtml(value){return String(value??"").replace(/[&<>"']/g,ch=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[ch]));}
 
+async function showStoredDrinksModal(memberId){
+  const member=membersData.find(item=>item.id===memberId);if(!member)return;
+  currentStoredDrinkMember=member;
+  document.getElementById("storedDrinksMemberLabel").textContent=member.name+"（"+member.phone+"）";
+  document.getElementById("storedDrinkName").value="";
+  document.getElementById("storedDrinkKind").value="sealed";
+  document.getElementById("storedDrinkQty").value="1";
+  document.getElementById("storedDrinkLocation").value="";
+  document.getElementById("storedDrinkNotes").value="";
+  onStoredDrinkKindChange();
+  showModal("storedDrinksModal");
+  fetchStoredDrinkOptions();
+  await fetchMemberStoredDrinks();
+}
+
+async function fetchStoredDrinkOptions(){
+  try{
+    const r=await fetch(API.inventory),j=await r.json();
+    if(j.code!==0)return;
+    const names=[...new Set(j.data.filter(item=>item.category==="酒水").map(item=>item.name))];
+    document.getElementById("storedDrinkOptions").innerHTML=names.map(name=>'<option value="'+escapeHtml(name)+'"></option>').join("");
+  }catch(e){}
+}
+
+function onStoredDrinkKindChange(){
+  const opened=document.getElementById("storedDrinkKind").value==="opened";
+  const qty=document.getElementById("storedDrinkQty");
+  document.getElementById("storedDrinkLevelGroup").style.display=opened?"block":"none";
+  qty.disabled=opened;
+  if(opened)qty.value="1";
+}
+
+async function fetchMemberStoredDrinks(){
+  if(!currentStoredDrinkMember)return;
+  try{
+    const r=await fetch(API.members+"/"+currentStoredDrinkMember.id+"/stored-drinks"),j=await r.json();
+    if(!r.ok||j.code!==0){alert("读取存酒失败: "+(j.detail||"unknown"));return;}
+    memberStoredDrinksData=j.data||[];
+    renderMemberStoredDrinks(memberStoredDrinksData,j.logs||[]);
+  }catch(e){alert("读取存酒失败: "+e);}
+}
+
+function renderMemberStoredDrinks(records,logs){
+  const tb=document.querySelector("#storedDrinksTable tbody");
+  if(!records.length)tb.innerHTML='<tr><td colspan="6" class="empty-hint">暂无存酒</td></tr>';
+  else tb.innerHTML=records.map(item=>{
+    const opened=item.storage_kind==="opened";
+    const amount=opened?("已开封 · 剩余 "+escapeHtml(item.remaining_level||"未记录")):(item.quantity+" 瓶（未开封）");
+    const expiry=item.is_expired?'<span class="storage-expiry expired">已过期</span>':'<span class="storage-expiry">剩 '+item.days_remaining+' 天</span>';
+    return '<tr class="'+(item.is_expired?'stored-drink-expired':'')+'"><td><strong>'+escapeHtml(item.item_name)+'</strong>'+(item.notes?'<div class="cell-note">'+escapeHtml(item.notes)+'</div>':'')+'</td><td>'+amount+'</td><td>'+escapeHtml(item.storage_location||"-")+'</td><td class="cell-time">'+escapeHtml((item.stored_at||"").substring(0,16))+'</td><td class="cell-time">'+escapeHtml((item.expires_at||"").substring(0,16))+'<br>'+expiry+'</td><td><button class="btn btn-xs btn-outline" onclick="retrieveStoredDrink('+item.id+')">取酒</button></td></tr>';
+  }).join("");
+  const ltb=document.querySelector("#storedDrinkLogsTable tbody");
+  if(!logs.length)ltb.innerHTML='<tr><td colspan="6" class="empty-hint">暂无记录</td></tr>';
+  else ltb.innerHTML=logs.map(log=>{
+    const action=log.action==="store"?"存酒":"取酒";
+    const kind=log.storage_kind==="opened"?("（已开封 "+escapeHtml(log.remaining_level||"")+'）'):"";
+    return '<tr><td class="cell-time">'+escapeHtml((log.created_at||"").substring(0,16))+'</td><td>'+action+'</td><td>'+escapeHtml(log.item_name)+kind+'</td><td>'+log.quantity+' 瓶</td><td>'+log.before_quantity+' → '+log.after_quantity+'</td><td>'+escapeHtml(log.detail||"-")+'</td></tr>';
+  }).join("");
+}
+
+async function confirmStoreDrink(){
+  if(!currentStoredDrinkMember)return;
+  const kind=document.getElementById("storedDrinkKind").value;
+  const data={
+    item_name:document.getElementById("storedDrinkName").value.trim(),
+    storage_kind:kind,
+    quantity:kind==="opened"?1:parseInt(document.getElementById("storedDrinkQty").value,10),
+    remaining_level:kind==="opened"?document.getElementById("storedDrinkLevel").value:null,
+    storage_location:document.getElementById("storedDrinkLocation").value.trim()||null,
+    notes:document.getElementById("storedDrinkNotes").value.trim()||null
+  };
+  if(!data.item_name){alert("请填写酒水名称");return;}
+  if(!Number.isInteger(data.quantity)||data.quantity<1){alert("请输入有效数量");return;}
+  if(!confirm("确认给 "+currentStoredDrinkMember.name+" 登记存酒？\n"+data.item_name+"，"+(kind==="opened"?("已开封，剩余 "+data.remaining_level):(data.quantity+" 瓶未开封"))+"\n有效期 30 天"))return;
+  try{
+    const r=await fetch(API.members+"/"+currentStoredDrinkMember.id+"/stored-drinks",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(data)}),j=await r.json();
+    if(!r.ok||j.code!==0){alert("存酒失败: "+(j.detail||"unknown"));return;}
+    document.getElementById("storedDrinkName").value="";
+    document.getElementById("storedDrinkQty").value="1";
+    document.getElementById("storedDrinkNotes").value="";
+    await fetchMemberStoredDrinks();
+  }catch(e){alert("存酒失败: "+e);}
+}
+
+async function retrieveStoredDrink(storageId){
+  if(!currentStoredDrinkMember)return;
+  const item=memberStoredDrinksData.find(record=>record.id===storageId);if(!item)return;
+  let quantity=1;
+  if(item.storage_kind==="sealed"){
+    const input=prompt("取出多少瓶？当前剩余 "+item.quantity+" 瓶","1");
+    if(input===null)return;
+    quantity=parseInt(input,10);
+    if(!Number.isInteger(quantity)||quantity<1||quantity>item.quantity){alert("请输入 1 到 "+item.quantity+" 之间的整数");return;}
+  }
+  const expiryWarning=item.is_expired?"\n注意：这批存酒已过期。":"";
+  if(!confirm("确认取酒："+item.item_name+"，数量 "+quantity+" 瓶？"+expiryWarning))return;
+  try{
+    const r=await fetch(API.members+"/"+currentStoredDrinkMember.id+"/stored-drinks/"+storageId+"/retrieve",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({quantity})}),j=await r.json();
+    if(!r.ok||j.code!==0){alert("取酒失败: "+(j.detail||"unknown"));return;}
+    await fetchMemberStoredDrinks();
+  }catch(e){alert("取酒失败: "+e);}
+}
 
 function showMemberModal(){document.getElementById("memberName").value="";document.getElementById("memberPhone").value="";showModal("memberModal");}
 
@@ -759,7 +872,7 @@ async function confirmEditMember(){
 
 
 
-function showRechargeModal(memberId,memberName){currentMember={id:memberId,name:memberName};document.getElementById("rechargeMemberLabel").textContent=memberName;document.getElementById("rechargeAmount").value="";document.getElementById("rechargeMethod").value="现金";showModal("rechargeModal");}
+function showRechargeModal(memberId){const member=membersData.find(item=>item.id===memberId);if(!member)return;currentMember=member;document.getElementById("rechargeMemberLabel").textContent=member.name;document.getElementById("rechargeAmount").value="";document.getElementById("rechargeMethod").value="现金";showModal("rechargeModal");}
 
 
 
@@ -767,18 +880,25 @@ async function confirmRecharge(){if(!currentMember)return;const amount=parseFloa
 
 
 
-function showResetPwdModal(memberId,memberName){currentMember={id:memberId,name:memberName};document.getElementById("resetPwdLabel").textContent=memberName;document.getElementById("resetPwdAdmin").value="";document.getElementById("resetPwdNew").value="";showModal("resetPwdModal");}
+function showResetPwdModal(memberId){
+  const member=membersData.find(item=>item.id===memberId);if(!member)return;
+  currentMember=member;
+  document.getElementById("resetPwdLabel").textContent=member.name;
+  document.getElementById("resetPwdNew").value="";
+  showModal("resetPwdModal");
+}
 
-
-
-async function confirmResetPwd(){if(!currentMember)return;const adminPwd=document.getElementById("resetPwdAdmin").value,newPwd=document.getElementById("resetPwdNew").value.trim();if(!newPwd||newPwd.length<4){alert("新密码至少4位");return;}try{const r=await fetch(API.resetPwd+"/"+currentMember.id+"/reset-password",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({admin_password:adminPwd,new_password:newPwd})});const j=await r.json();if(j.code===0){closeModal("resetPwdModal");alert("密码已重置");}else alert("重置失败: "+(j.detail||j.msg||"unknown"));}catch(e){alert("请求失败: "+e);}}
-
-
-
-
-
-
-
+async function confirmResetPwd(){
+  if(!currentMember)return;
+  const newPwd=document.getElementById("resetPwdNew").value.trim();
+  if(!newPwd||newPwd.length<4){alert("新密码至少4位");return;}
+  try{
+    const r=await fetch(API.resetPwd+"/"+currentMember.id+"/reset-password",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({new_password:newPwd})});
+    const j=await r.json();
+    if(j.code===0){closeModal("resetPwdModal");alert("密码已重置");}
+    else alert("重置失败: "+(j.detail||j.msg||"unknown"));
+  }catch(e){alert("请求失败: "+e);}
+}
 // ================================================================
 
 
@@ -795,34 +915,47 @@ async function confirmResetPwd(){if(!currentMember)return;const adminPwd=documen
 
 
 
-async function fetchPackages(){try{const r=await fetch(API.packages);const j=await r.json();if(j.code===0){packagesData=j.data;renderPackages();}}catch(e){}}
-
-
-
+async function fetchPackages(){
+  try{const r=await fetch(API.packages),j=await r.json();if(j.code===0){packagesData=j.data;renderPackages();}}catch(e){}
+}
 function onPkgTypeChange(){renderPackages();}
-
-
-
-function renderPackages(){const filter=document.getElementById("pkgTypeFilter").value,filtered=packagesData.filter(p=>p.type===filter);const tb=document.querySelector("#packagesTable tbody");document.getElementById("pkgTypeLabel").textContent=filter==="open"?"开台套餐":"续时套餐";if(!filtered.length){tb.innerHTML='<tr><td colspan="4" class="empty-hint">暂无套餐</td></tr>';return;}tb.innerHTML=filtered.map(p=>'<tr><td>'+p.name+'</td><td>'+p.duration_minutes+'</td><td>'+(p.price_normal||0).toFixed(2)+'</td><td><button class="btn btn-xs btn-outline" onclick="showEditPriceModal('+p.id+')">改价</button> <button class="btn btn-xs btn-danger" onclick="showDeletePkgModal('+p.id+',\''+p.name+'\')">删除</button></td></tr>').join("");}
-
-
-
-function showPackageModal(){document.getElementById("packageModalTitle").textContent="新增套餐";document.getElementById("editPackageId").value="";document.getElementById("pkgName").value="";document.getElementById("pkgType").value=document.getElementById("pkgTypeFilter").value;document.getElementById("pkgDuration").value="180";document.getElementById("pkgPriceNormal").value="0";showModal("packageModal");}
-
-
-
-async function confirmPackage(){const editId=document.getElementById("editPackageId").value;const data={name:document.getElementById("pkgName").value.trim(),type:document.getElementById("pkgType").value,duration_minutes:parseInt(document.getElementById("pkgDuration").value)||0,price_normal:parseFloat(document.getElementById("pkgPriceNormal").value)||0};if(!data.name||data.duration_minutes<1){alert("请填写套餐名称和有效时长");return;}try{let r;if(editId){const pwd=prompt("修改套餐需要管理密码");if(!pwd)return;r=await fetch(API.packages+"/"+editId,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({...data,admin_password:pwd})});}else r=await fetch(API.packages,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(data)});const j=await r.json();if(j.code===0){closeModal("packageModal");fetchPackages();}else alert((editId?"修改":"新增")+"失败: "+(j.detail||j.msg||"unknown"));}catch(e){alert("请求失败: "+e);}}
-
-
-
-function showEditPriceModal(pkgId){const p=packagesData.find(x=>x.id===pkgId);if(!p)return;document.getElementById("editPricePkgId").value=pkgId;document.getElementById("epPriceNormal").value=p.price_normal||0;document.getElementById("epAdminPassword").value="";showModal("editPriceModal");}
-
-
-
-async function confirmEditPrice(){const pkgId=document.getElementById("editPricePkgId").value,data={price_normal:parseFloat(document.getElementById("epPriceNormal").value)||0,admin_password:document.getElementById("epAdminPassword").value};try{const r=await fetch(API.packages+"/"+pkgId,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(data)});const j=await r.json();if(j.code===0){closeModal("editPriceModal");fetchPackages();}else alert("改价失败: "+(j.detail||"unknown"));}catch(e){alert("请求失败: "+e);}}
-
-
-
+function packageItemSummary(items){
+  if(!items||!items.length)return "无附带酒水/小吃";
+  return items.map(i=>(i.item_type==="drink"?"酒水：":"小吃：")+i.item_name+"×"+i.qty+(i.unit_label||(i.item_type==="snack"?"份":""))).join("，");
+}
+function renderPackages(){
+  const filter=document.getElementById("pkgTypeFilter").value,filtered=packagesData.filter(p=>p.type===filter),tb=document.querySelector("#packagesTable tbody");
+  document.getElementById("pkgTypeLabel").textContent=filter==="open"?"开台套餐":"续时套餐";
+  if(!filtered.length){tb.innerHTML='<tr><td colspan="5" class="empty-hint">暂无套餐</td></tr>';return;}
+  tb.innerHTML=filtered.map(p=>'<tr><td>'+p.name+'</td><td>'+p.duration_minutes+'</td><td>'+Number(p.price_normal||0).toFixed(2)+'</td><td style="font-size:12px;color:var(--text-dim);">'+packageItemSummary(p.items)+'</td><td><button class="btn btn-xs btn-outline" onclick="showEditPackageModal('+p.id+')">编辑</button> <button class="btn btn-xs btn-danger" onclick="showDeletePkgModal('+p.id+',\''+p.name+'\')">删除</button></td></tr>').join("");
+}
+function populatePackageDrinkOptions(){
+  const drinks=inventoryData.filter(i=>i.category==="酒水");
+  document.getElementById("pkgDrinkInventory").innerHTML=drinks.length?drinks.map(i=>'<option value="'+i.id+'">'+i.name+'（库存 '+inventoryStockText(i)+'）</option>').join(""):'<option value="">请先在库存管理新增酒水</option>';
+}
+function renderPackageItemEditor(){
+  const indexed=editingPackageItems.map((item,index)=>({item,index})),drinks=indexed.filter(x=>x.item.item_type==="drink"),snacks=indexed.filter(x=>x.item.item_type==="snack");
+  document.getElementById("pkgDrinkList").innerHTML=drinks.length?drinks.map(x=>'<div style="display:flex;justify-content:space-between;padding:4px 0;"><span>'+x.item.item_name+' × '+x.item.qty+(x.item.unit_label||"瓶")+'</span><button type="button" class="btn btn-xs btn-danger" onclick="removePackageItem('+x.index+')">移除</button></div>').join(""):"暂未添加酒水";
+  document.getElementById("pkgSnackList").innerHTML=snacks.length?snacks.map(x=>'<div style="display:flex;justify-content:space-between;padding:4px 0;"><span>'+x.item.item_name+' × '+x.item.qty+'份</span><button type="button" class="btn btn-xs btn-danger" onclick="removePackageItem('+x.index+')">移除</button></div>').join(""):"暂未添加小吃";
+}
+function showPackageModal(){
+  editingPackageItems=[];document.getElementById("packageModalTitle").textContent="新增套餐";document.getElementById("editPackageId").value="";document.getElementById("pkgName").value="";document.getElementById("pkgType").value=document.getElementById("pkgTypeFilter").value;document.getElementById("pkgDuration").value="180";document.getElementById("pkgPriceNormal").value="0";document.getElementById("pkgDrinkQty").value="1";document.getElementById("pkgSnackName").value="";document.getElementById("pkgSnackQty").value="1";populatePackageDrinkOptions();renderPackageItemEditor();showModal("packageModal");
+}
+function showEditPackageModal(pkgId){
+  const p=packagesData.find(x=>x.id===pkgId);if(!p)return;editingPackageItems=(p.items||[]).map(item=>({...item}));document.getElementById("packageModalTitle").textContent="编辑套餐";document.getElementById("editPackageId").value=p.id;document.getElementById("pkgName").value=p.name||"";document.getElementById("pkgType").value=p.type;document.getElementById("pkgDuration").value=p.duration_minutes;document.getElementById("pkgPriceNormal").value=p.price_normal||0;document.getElementById("pkgDrinkQty").value="1";document.getElementById("pkgSnackName").value="";document.getElementById("pkgSnackQty").value="1";populatePackageDrinkOptions();renderPackageItemEditor();showModal("packageModal");
+}
+function addPackageDrinkItem(){
+  const inventoryId=parseInt(document.getElementById("pkgDrinkInventory").value),qty=parseInt(document.getElementById("pkgDrinkQty").value)||1,inventory=inventoryData.find(i=>i.id===inventoryId);if(!inventory){alert("请先选择酒水商品");return;}const existing=editingPackageItems.find(i=>i.item_type==="drink"&&i.inventory_id===inventoryId);if(existing)existing.qty+=qty;else editingPackageItems.push({item_type:"drink",inventory_id:inventoryId,item_name:inventory.name,qty,unit_label:inventory.unit_name||"瓶"});renderPackageItemEditor();
+}
+function addPackageSnackItem(){
+  const name=document.getElementById("pkgSnackName").value.trim(),qty=parseInt(document.getElementById("pkgSnackQty").value)||1;if(!name){alert("请填写小吃名称");return;}const existing=editingPackageItems.find(i=>i.item_type==="snack"&&i.item_name===name);if(existing)existing.qty+=qty;else editingPackageItems.push({item_type:"snack",item_name:name,qty,unit_label:"份"});document.getElementById("pkgSnackName").value="";renderPackageItemEditor();
+}
+function removePackageItem(index){editingPackageItems.splice(index,1);renderPackageItemEditor();}
+async function confirmPackage(){
+  const editId=document.getElementById("editPackageId").value,data={name:document.getElementById("pkgName").value.trim(),type:document.getElementById("pkgType").value,duration_minutes:parseInt(document.getElementById("pkgDuration").value)||0,price_normal:parseFloat(document.getElementById("pkgPriceNormal").value)||0,items:editingPackageItems.map(i=>i.item_type==="drink"?{item_type:"drink",inventory_id:i.inventory_id,qty:i.qty}:{item_type:"snack",item_name:i.item_name,qty:i.qty})};
+  if(!data.name||data.duration_minutes<1){alert("请填写套餐名称和有效时长");return;}
+  try{const r=editId?await fetch(API.packages+"/"+editId,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(data)}):await fetch(API.packages,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(data)}),j=await r.json();if(r.ok&&j.code===0){closeModal("packageModal");fetchPackages();}else alert((editId?"修改":"新增")+"失败: "+(j.detail||j.msg||"unknown"));}catch(e){alert("请求失败: "+e);}
+}
 function showDeletePkgModal(pkgId,pkgName){document.getElementById("deletePkgName").textContent=pkgName;document.getElementById("deletePkgPassword").value="";document.getElementById("confirmDeletePkg").onclick=async()=>{const pwd=document.getElementById("deletePkgPassword").value;try{const r=await fetch(API.packages+"/"+pkgId,{method:"DELETE",headers:{"Content-Type":"application/json"},body:JSON.stringify({admin_password:pwd})});const j=await r.json();if(j.code===0){closeModal("deletePkgModal");fetchPackages();}else alert("删除失败: "+(j.detail||"unknown"));}catch(e){alert("请求失败: "+e);}};showModal("deletePkgModal");}
 
 
@@ -851,54 +984,90 @@ async function confirmDeletePkg(){}
 
 
 
-async function fetchInventory(){try{const r=await fetch(API.inventory);const j=await r.json();if(j.code===0){inventoryData=j.data;renderInventory();}}catch(e){}}
+async function fetchInventory(){
+  try{
+    const r=await fetch(API.inventory),j=await r.json();
+    if(j.code===0){inventoryData=j.data;renderInventory();}
+  }catch(e){}
+}
 
-
+function inventoryStockText(item){
+  const stock=Number(item.stock||0);
+  const unit=item.unit_name||"瓶";
+  const caseSize=Number(item.case_size||0);
+  if(caseSize>=2){
+    const cases=Math.floor(stock/caseSize),remainder=stock%caseSize;
+    return cases+"箱 "+remainder+unit+"（总"+stock+unit+"）";
+  }
+  return stock+unit;
+}
 
 function renderInventory(){
   const tb=document.querySelector("#inventoryTable tbody");
-  if(!inventoryData.length){tb.innerHTML='<tr><td colspan="6" class="empty-hint">&#26242;&#26080;&#24211;&#23384;</td></tr>';return;}
-  tb.innerHTML=inventoryData.map(i=>'<tr><td>'+i.category+'</td><td>'+i.name+'</td><td>'+Number(i.unit_price||0).toFixed(2)+'</td><td class="admin-only" style="display:none;">'+Number(i.cost_price||0).toFixed(2)+'</td><td style="'+(i.stock<5?'color:var(--danger);font-weight:700;':'')+'">'+i.stock+'</td><td><button class="btn btn-xs btn-outline" onclick="showEditInventoryModal('+i.id+')">&#32534;&#36753;</button> <button class="btn btn-xs btn-danger del-btn" style="display:none;" onclick="deleteInventory('+i.id+')">&#21024;&#38500;</button></td></tr>').join("");
+  if(!inventoryData.length){tb.innerHTML='<tr><td colspan="9" class="empty-hint">暂无库存</td></tr>';return;}
+  tb.innerHTML=inventoryData.map(i=>{
+    const unit=i.unit_name||"瓶";
+    const caseSize=Number(i.case_size||0);
+    const caseSpec=caseSize>=2?caseSize+unit+"/箱":"-";
+    const casePrice=caseSize>=2?Number(i.case_price||0).toFixed(2):"-";
+    const low=Number(i.stock||0)<=Number(i.low_stock??5);
+    return '<tr><td>'+i.category+'</td><td>'+i.name+'</td><td>'+unit+'</td><td>'+Number(i.unit_price||0).toFixed(2)+'</td><td>'+caseSpec+'</td><td>'+casePrice+'</td><td class="admin-only" style="display:none;">'+Number(i.cost_price||0).toFixed(2)+'</td><td style="'+(low?'color:var(--danger);font-weight:700;':'')+'">'+inventoryStockText(i)+'</td><td><button class="btn btn-xs btn-outline" onclick="showEditInventoryModal('+i.id+')">编辑</button> <button class="btn btn-xs btn-danger del-btn" style="display:none;" onclick="deleteInventory('+i.id+')">删除</button></td></tr>';
+  }).join("");
   applyAdminToolsVisibility();
 }
 
-
 function showInventoryModal(){
-  document.getElementById("inventoryModalTitle").textContent="\u65b0\u589e\u5e93\u5b58\u7269\u54c1";
+  document.getElementById("inventoryModalTitle").textContent="新增库存物品";
   document.getElementById("editInvId").value="";
   document.getElementById("invCategory").selectedIndex=0;
   document.getElementById("invName").value="";
+  document.getElementById("invUnitName").value="瓶";
   document.getElementById("invPrice").value="0";
+  document.getElementById("invCaseSize").value="0";
+  document.getElementById("invCasePrice").value="0";
   document.getElementById("invCostPrice").value="0";
   document.getElementById("invStock").value="0";
+  document.getElementById("invLowStock").value="5";
   showModal("inventoryModal");
   applyAdminToolsVisibility();
 }
-
 
 function showEditInventoryModal(itemId){
   const i=inventoryData.find(x=>x.id===itemId);if(!i)return;
-  document.getElementById("inventoryModalTitle").textContent="\u7f16\u8f91\u5e93\u5b58\u7269\u54c1";
+  document.getElementById("inventoryModalTitle").textContent="编辑库存物品";
   document.getElementById("editInvId").value=itemId;
   document.getElementById("invCategory").value=i.category;
   document.getElementById("invName").value=i.name;
-  document.getElementById("invPrice").value=i.unit_price;
+  document.getElementById("invUnitName").value=i.unit_name||"瓶";
+  document.getElementById("invPrice").value=Number(i.unit_price||0);
+  document.getElementById("invCaseSize").value=Number(i.case_size||0);
+  document.getElementById("invCasePrice").value=Number(i.case_price||0);
   document.getElementById("invCostPrice").value=Number(i.cost_price||0);
-  document.getElementById("invStock").value=i.stock;
+  document.getElementById("invStock").value=Number(i.stock||0);
+  document.getElementById("invLowStock").value=Number(i.low_stock??5);
   showModal("inventoryModal");
   applyAdminToolsVisibility();
 }
 
-
 async function confirmInventory(){
   const editId=document.getElementById("editInvId").value;
-  const data={category:document.getElementById("invCategory").value,name:document.getElementById("invName").value.trim(),unit_price:parseFloat(document.getElementById("invPrice").value)||0,stock:parseInt(document.getElementById("invStock").value)||0};
+  const data={
+    category:document.getElementById("invCategory").value,
+    name:document.getElementById("invName").value.trim(),
+    unit_name:document.getElementById("invUnitName").value.trim()||"瓶",
+    unit_price:parseFloat(document.getElementById("invPrice").value)||0,
+    case_size:parseInt(document.getElementById("invCaseSize").value)||0,
+    case_price:parseFloat(document.getElementById("invCasePrice").value)||0,
+    stock:parseInt(document.getElementById("invStock").value)||0,
+    low_stock:parseInt(document.getElementById("invLowStock").value)||0
+  };
+  if(data.case_size<2){data.case_size=0;data.case_price=0;}
   if(adminToolsVisible)data.cost_price=parseFloat(document.getElementById("invCostPrice").value)||0;
-  if(!data.name){alert("\u8bf7\u586b\u5199\u7269\u54c1\u540d\u79f0");return;}
+  if(!data.name){alert("请填写物品名称");return;}
   if(editId){
     const original=inventoryData.find(x=>x.id===parseInt(editId));
-    if(original&&data.stock!==original.stock){
-      const password=prompt("\u624b\u52a8\u4fee\u6539\u5e93\u5b58\u91cf\uff0c\u8bf7\u8f93\u5165\u7ba1\u7406\u5bc6\u7801");
+    if(original&&data.stock!==Number(original.stock||0)){
+      const password=prompt("手动修改库存量，请输入管理密码");
       if(!password)return;
       data.admin_password=password;
     }
@@ -906,20 +1075,18 @@ async function confirmInventory(){
   try{
     const r=await fetch(editId?API.inventory+"/"+editId:API.inventory,{method:editId?"PUT":"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(data)});
     const j=await r.json();
-    if(j.code===0){closeModal("inventoryModal");fetchInventory();}else alert("\u64cd\u4f5c\u5931\u8d25: "+(j.detail||"unknown"));
-  }catch(e){alert("\u8bf7\u6c42\u5931\u8d25: "+e);}
+    if(j.code===0){closeModal("inventoryModal");fetchInventory();}
+    else alert("操作失败: "+(j.detail||"unknown"));
+  }catch(e){alert("请求失败: "+e);}
 }
 
-
-async function deleteInventory(itemId){if(!confirm("确认删除？"))return;try{const r=await fetch(API.inventory+"/"+itemId,{method:"DELETE"});const j=await r.json();if(j.code===0)fetchInventory();else alert("删除失败: "+(j.detail||"unknown"));}catch(e){alert("请求失败: "+e);}}
-
-
-
-
-
-
-
-// ================================================================
+async function deleteInventory(itemId){
+  if(!confirm("确认删除该库存物品？"))return;
+  try{
+    const r=await fetch(API.inventory+"/"+itemId,{method:"DELETE"}),j=await r.json();
+    if(j.code===0)fetchInventory();else alert("删除失败: "+(j.detail||"unknown"));
+  }catch(e){alert("请求失败: "+e);}
+}
 
 // Staff
 
@@ -1003,6 +1170,9 @@ async function deleteStaff(staffId){
 
 
 
+function drinkUnitLabel(drink){return drink.unit_label||(drink.sale_unit==="case"?"箱":"瓶");}
+function drinkSummaryLine(drink){const label=drinkUnitLabel(drink),price=Number(drink.unit_price||0),subtotal=Number(drink.qty||0)*price,prefix=drink.source==="package"?"[套餐] ":"";return prefix+drink.item_name+" × "+drink.qty+label+" @"+price.toFixed(2)+" = "+subtotal.toFixed(2);}
+function renderSettleDrinkSummary(drinks){document.getElementById("settleDrinksSummary").innerHTML=drinks.length?drinks.map(drinkSummaryLine).join("<br>"):"暂无";}
 async function fetchActiveBilling(){try{const r=await fetch(API.billingActive);const j=await r.json();if(j.code===0){activeBillingData=j.data;renderActiveBilling(activeBillingData);}}catch(e){}}
 
 function renderActiveBilling(bills){
@@ -1057,7 +1227,7 @@ function showSettle(billingId){
 
 
 
-    document.getElementById("settleDrinksSummary").innerHTML=drinks.length?drinks.map(d=>d.item_name+' x'+d.qty+' @'+(d.unit_price||0)+' = '+(d.qty*(d.unit_price||0)).toFixed(2)).join('<br>'):'暂无';
+    renderSettleDrinkSummary(drinks);
 
 
 
@@ -1109,39 +1279,12 @@ function _getPkgPrice(pkg){
   return parseFloat(pkg.price_normal||0);
 }
 
+function renderSelectedPackageItems(pkg){document.getElementById("settlePackageItems").textContent="套餐内容："+(pkg?packageItemSummary(pkg.items):"暂无");}
 function updateSettleTotal(){
-
-  const pkgId=parseInt(document.getElementById("settlePackage").value);
-
-  if(!pkgId){document.getElementById("settleRoomFee").textContent="0";document.getElementById("settleTotal").textContent="0";document.getElementById("maxDiscount").textContent="0";return;}
-
-  const pkg=packagesData.find(p=>p.id===pkgId);
-
-
-  const roomFee=pkg?_getPkgPrice(pkg):0;
-
-  document.getElementById("settleRoomFee").textContent=roomFee.toFixed(2);
-
-  const drinksFee=parseFloat(document.getElementById("settleDrinksFee").textContent)||0;
-
-  const subtotal=roomFee+drinksFee;
-
-  const discount=parseFloat(document.getElementById("settleDiscount").value)||0;
-
-  const maxDisc=Math.round(subtotal*0.2*100)/100;
-
-  document.getElementById("maxDiscount").textContent=maxDisc.toFixed(2);
-
-  if(discount>maxDisc){document.getElementById("settleDiscount").value=maxDisc.toFixed(2);}
-
-  const total=Math.max(0,subtotal-Math.min(discount,maxDisc));
-
-  document.getElementById("settleTotal").textContent=total.toFixed(2);
-
+  const pkgId=parseInt(document.getElementById("settlePackage").value),pkg=packagesData.find(p=>p.id===pkgId);renderSelectedPackageItems(pkg);
+  if(!pkg){document.getElementById("settleRoomFee").textContent="0";document.getElementById("settleTotal").textContent="0";document.getElementById("maxDiscount").textContent="0";return;}
+  const roomFee=_getPkgPrice(pkg);document.getElementById("settleRoomFee").textContent=roomFee.toFixed(2);const drinksFee=parseFloat(document.getElementById("settleDrinksFee").textContent)||0,subtotal=roomFee+drinksFee,discount=parseFloat(document.getElementById("settleDiscount").value)||0,maxDisc=Math.round(subtotal*0.2*100)/100;document.getElementById("maxDiscount").textContent=maxDisc.toFixed(2);if(discount>maxDisc)document.getElementById("settleDiscount").value=maxDisc.toFixed(2);document.getElementById("settleTotal").textContent=Math.max(0,subtotal-Math.min(discount,maxDisc)).toFixed(2);
 }
-
-
-
 function onSettlePaymentChange(){
 
   const v=document.getElementById("settlePayment").value;
@@ -1183,23 +1326,9 @@ function lookupSettleMember(){
 
 
 async function saveSettlementDraft(){
-  if(!currentBilling)return;
-  const packageId=parseInt(document.getElementById("settlePackage").value);
-  if(!packageId){alert("\u8bf7\u9009\u62e9\u5957\u9910");return;}
-  const data={package_id:packageId,payment_method:document.getElementById("settlePayment").value,discount:parseFloat(document.getElementById("settleDiscount").value)||0};
-  try{
-    const r=await fetch(API.billingDraft+"/"+currentBilling.id+"/draft",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(data)});
-    const j=await r.json();
-    if(!r.ok||j.code!==0){alert("\u4fdd\u5b58\u5931\u8d25: "+(j.detail||"unknown"));return;}
-    Object.assign(currentBilling,j);
-    document.getElementById("settleDrinksFee").textContent=Number(j.drinks_fee||0).toFixed(2);
-    updateSettleTotal();
-    fetchActiveBilling();
-    alert("\u5f53\u524d\u8d26\u5355\u7248\u672c\u5df2\u4fdd\u5b58\uff0c\u672a\u7ed3\u8d26");
-  }catch(e){alert("\u8bf7\u6c42\u5931\u8d25: "+e);}
+  if(!currentBilling)return;const packageId=parseInt(document.getElementById("settlePackage").value);if(!packageId){alert("请选择套餐");return;}const data={package_id:packageId,payment_method:document.getElementById("settlePayment").value,discount:parseFloat(document.getElementById("settleDiscount").value)||0};
+  try{const r=await fetch(API.billingDraft+"/"+currentBilling.id+"/draft",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(data)}),j=await r.json();if(!r.ok||j.code!==0){alert("保存失败: "+(j.detail||"unknown"));return;}Object.assign(currentBilling,j);currentBilling.drinks=j.drinks||[];document.getElementById("settleDrinksFee").textContent=Number(j.drinks_fee||0).toFixed(2);renderSettleDrinkSummary(currentBilling.drinks);updateSettleTotal();fetchActiveBilling();fetchInventory();alert("当前账单版本已保存，套餐酒水库存已同步，尚未结账");}catch(e){alert("请求失败: "+e);}
 }
-
-
 async function confirmSettle(){
 
 
@@ -1268,7 +1397,7 @@ async function fetchOpLogs(){try{const r=await fetch(API.operationLogs+"?limit=1
 
 
 
-function renderOpLogs(logs){const tb=document.querySelector("#logsTable tbody");if(!logs.length){tb.innerHTML='<tr><td colspan="4" class="empty-hint">暂无日志</td></tr>';return;}const labels={open_room:"开台",close_room:"关台",extend_room:"",auto_close:"定时关台",create_booking:"预",cancel_booking:"取消预订",booking_open:"预订开台",booking_failed:"预订失败",create_member:"新增会员",update_member:"编辑会员",recharge_member:"会员充值",reset_member_password:"重置密码",create_package:"新增套餐",update_package:"改",delete_package:"删除套餐",create_staff:"新增店内人员",update_staff:"编辑店内人员",delete_staff:"删除店内人员",create_inventory:"新库",update_inventory:"改库",delete_inventory:"删除库存",add_drink:"添加酒水",update_billing:"编辑账单",save_billing_draft:"保存账单",settle_billing:"结账"};tb.innerHTML=logs.map(l=>{const t=l.created_at?l.created_at.replace("T"," ").substring(0,19):"-";return '<tr><td style="font-size:12px;color:var(--text-dim);white-space:nowrap;">'+t+'</td><td>'+(labels[l.action]||l.action)+'</td><td>'+(l.room_no||"-")+'</td><td style="font-size:13px;color:var(--text-dim);">'+(l.detail||"-")+'</td></tr>';}).join("");}
+function renderOpLogs(logs){const tb=document.querySelector("#logsTable tbody");if(!logs.length){tb.innerHTML='<tr><td colspan="4" class="empty-hint">暂无日志</td></tr>';return;}const labels={open_room:"开台",close_room:"关台",extend_room:"",auto_close:"定时关台",create_booking:"预",cancel_booking:"取消预订",booking_open:"预订开台",booking_failed:"预订失败",create_member:"新增会员",update_member:"编辑会员",recharge_member:"会员充值",reset_member_password:"重置密码",create_package:"新增套餐",update_package:"改",delete_package:"删除套餐",create_staff:"新增店内人员",update_staff:"编辑店内人员",delete_staff:"删除店内人员",create_inventory:"新库",update_inventory:"改库",delete_inventory:"删除库存",add_drink:"添加酒水",update_billing:"编辑账单",save_billing_draft:"保存账单",settle_billing:"结账",store_member_drink:"会员存酒",retrieve_member_drink:"会员取酒"};tb.innerHTML=logs.map(l=>{const t=l.created_at?l.created_at.replace("T"," ").substring(0,19):"-";return '<tr><td style="font-size:12px;color:var(--text-dim);white-space:nowrap;">'+t+'</td><td>'+(labels[l.action]||l.action)+'</td><td>'+(l.room_no||"-")+'</td><td style="font-size:13px;color:var(--text-dim);">'+(l.detail||"-")+'</td></tr>';}).join("");}
 
 
 
@@ -1413,261 +1542,87 @@ async function checkRoomBillable(roomNo){
 
 
 
-function showDrinksModal(){
-
-
-
+async function showDrinksModal(){
   if(!currentBilling)return;
-
-
-
   document.getElementById("drinksRoomLabel").textContent=currentBilling.room_no;
-
-
-
-  // Re-fetch billing to get latest drinks
-
-
-
-  fetch(API.billingActive).then(r=>r.json()).then(json=>{
-
-
-
-    if(json.code!==0)return;
-
-
-
-    const bill=json.data.find(b=>b.id===currentBilling.id);
-
-
-
+  try{
+    const [billingResponse,inventoryResponse]=await Promise.all([fetch(API.billingActive),fetch(API.inventory)]);
+    const billingJson=await billingResponse.json(),inventoryJson=await inventoryResponse.json();
+    if(billingJson.code!==0||inventoryJson.code!==0)return;
+    const bill=billingJson.data.find(b=>b.id===currentBilling.id);
     if(!bill)return;
-
-
-
     currentBilling=bill;
-
-
-
+    inventoryData=inventoryJson.data;
     renderDrinksEditTable(bill.drinks||[]);
-
-
-
-    document.getElementById("newDrinkItem").innerHTML=inventoryData.map(i=>'<option value="'+i.name+'" data-price="'+i.unit_price+'">'+i.category+' - '+i.name+' (库存:'+i.stock+')</option>').join("");
-
-
-
+    const available=inventoryData.filter(i=>Number(i.stock||0)>0);
+    const itemSelect=document.getElementById("newDrinkItem");
+    itemSelect.innerHTML=available.map(i=>'<option value="'+i.id+'">'+i.category+' - '+i.name+'（'+inventoryStockText(i)+'）</option>').join("");
     document.getElementById("newDrinkQty").value="1";
-
-
-
-
-
-
-
+    onNewDrinkItemChange();
     showModal("drinksModal");
-
-
-
-  });
-
-
-
+  }catch(e){alert("加载消费明细失败: "+e);}
 }
 
+function onNewDrinkItemChange(){
+  const itemId=parseInt(document.getElementById("newDrinkItem").value),item=inventoryData.find(i=>i.id===itemId);
+  const unitSelect=document.getElementById("newDrinkSaleUnit");
+  if(!item){unitSelect.innerHTML="";document.getElementById("newDrinkHint").textContent="暂无可售库存";return;}
+  const unit=item.unit_name||"瓶";
+  let options='<option value="unit">'+unit+'（'+Number(item.unit_price||0).toFixed(2)+'元）</option>';
+  if(Number(item.case_size||0)>=2&&Number(item.case_price||0)>0){
+    options+='<option value="case">箱（'+item.case_size+unit+'，'+Number(item.case_price||0).toFixed(2)+'元）</option>';
+  }
+  unitSelect.innerHTML=options;
+  updateNewDrinkHint();
+}
 
-
-
-
-
+function updateNewDrinkHint(){
+  const itemId=parseInt(document.getElementById("newDrinkItem").value),item=inventoryData.find(i=>i.id===itemId);
+  if(!item)return;
+  const saleUnit=document.getElementById("newDrinkSaleUnit").value,qty=Math.max(1,parseInt(document.getElementById("newDrinkQty").value)||1);
+  const unitSize=saleUnit==="case"?Number(item.case_size||0):1;
+  const price=saleUnit==="case"?Number(item.case_price||0):Number(item.unit_price||0);
+  const required=qty*unitSize,unit=item.unit_name||"瓶",enough=Number(item.stock||0)>=required;
+  const hint=document.getElementById("newDrinkHint");
+  hint.textContent="库存："+inventoryStockText(item)+"；本次扣减 "+required+unit+"；金额 "+(qty*price).toFixed(2)+" 元";
+  hint.style.color=enough?"var(--text-dim)":"var(--danger)";
+}
 
 function renderDrinksEditTable(drinks){
-
-
-
-  const tb=document.querySelector("#drinksEditTable tbody");
-
-
-
-  if(!drinks.length){tb.innerHTML='<tr><td colspan="5" style="color:var(--text-dim);padding:20px;">暂无明细</td></tr>';return;}
-
-
-
-  tb.innerHTML=drinks.map(d=>{
-
-
-
-    const subtotal=(d.qty*(d.unit_price||0)).toFixed(2);
-
-
-
-    return '<tr><td>'+d.item_name+'</td><td>'+(d.unit_price||0).toFixed(2)+'</td>'+
-
-
-
-      '<td>'+d.qty+'</td><td>'+subtotal+'</td>'+
-
-
-
-      '<td><button class="btn btn-xs btn-danger" onclick="deleteDrink('+d.id+')">删除</button></td></tr>';
-
-
-
-  }).join("");
-
-
-
+  const tb=document.querySelector("#drinksEditTable tbody");if(!drinks.length){tb.innerHTML='<tr><td colspan="7" style="color:var(--text-dim);padding:20px;">暂无明细</td></tr>';return;}
+  tb.innerHTML=drinks.map(d=>{const label=drinkUnitLabel(d),subtotal=(Number(d.qty||0)*Number(d.unit_price||0)).toFixed(2),isPackage=d.source==="package",operation=isPackage?'<span style="font-size:12px;color:var(--accent);">套餐包含</span>':'<button class="btn btn-xs btn-danger" onclick="deleteDrink('+d.id+')">删除</button>',stockText=Number(d.stock_qty||0)>0?Number(d.stock_qty):"-";return '<tr><td>'+(isPackage?'[套餐] ':'')+d.item_name+'</td><td>'+label+(Number(d.unit_size||1)>1?'（'+d.unit_size+'基础单位）':'')+'</td><td>'+Number(d.unit_price||0).toFixed(2)+'</td><td>'+d.qty+'</td><td>'+subtotal+'</td><td>'+stockText+'</td><td>'+operation+'</td></tr>';}).join("");
 }
-
-
-
-
-
-
-
-function addDrinkFromModal(){
-
-
-
+async function addDrinkFromModal(){
   if(!currentBilling)return;
-
-
-
-  const sel=document.getElementById("newDrinkItem");
-
-
-
-  const itemName=sel.value;
-
-
-
-  const qty=parseInt(document.getElementById("newDrinkQty").value)||1;
-
-
-
-  const price=parseFloat(sel.selectedOptions[0].dataset.price)||0;
-
-
-
-  const body={billing_id:currentBilling.id,item_name:itemName,qty,unit_price:price};
-
-
-
-  fetch(API.addDrink,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}).then(r=>r.json()).then(j=>{
-
-
-
-    if(j.code===0)showDrinksModal();
-
-
-
-    else alert("添加失败: "+(j.detail||"unknown"));
-
-
-
-  });
-
-
-
+  const inventoryId=parseInt(document.getElementById("newDrinkItem").value),qty=parseInt(document.getElementById("newDrinkQty").value)||1;
+  if(!inventoryId){alert("暂无可售库存物品");return;}
+  const body={billing_id:currentBilling.id,inventory_id:inventoryId,sale_unit:document.getElementById("newDrinkSaleUnit").value,qty};
+  try{
+    const r=await fetch(API.addDrink,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}),j=await r.json();
+    if(r.ok&&j.code===0)showDrinksModal();else alert("添加失败: "+(j.detail||"unknown"));
+  }catch(e){alert("请求失败: "+e);}
 }
-
-
-
-
-
-
 
 async function deleteDrink(drinkId){
-
-
-
-  if(!confirm("确认删除该明细？"))return;
-
-
-
-  const r=await fetch(API.drinkDelete+"/"+drinkId,{method:"DELETE"});
-
-
-
-  const j=await r.json();
-
-
-
-  if(j.code===0)showDrinksModal();
-
-
-
-  else alert("删除失败: "+(j.detail||"unknown"));
-
-
-
+  if(!confirm("确认删除该明细并退回库存？"))return;
+  const r=await fetch(API.drinkDelete+"/"+drinkId,{method:"DELETE"}),j=await r.json();
+  if(r.ok&&j.code===0)showDrinksModal();else alert("删除失败: "+(j.detail||"unknown"));
 }
-
-
-
-
-
-
 
 function closeDrinksModal(){
-
-
-
   closeModal("drinksModal");
-
-
-
-  // Refresh settlement display
-
-
-
   if(currentBilling){
-
-
-
     fetch(API.billingActive).then(r=>r.json()).then(json=>{
-
-
-
-      if(json.code!==0)return;const bill=json.data.find(b=>b.id===currentBilling.id);if(!bill)return;
-
-
-
+      if(json.code!==0)return;
+      const bill=json.data.find(b=>b.id===currentBilling.id);if(!bill)return;
       currentBilling=bill;
-
-
-
-      document.getElementById("settleDrinksFee").textContent=(bill.drinks_fee||0).toFixed(2);
-
-
-
-      const drinks=bill.drinks||[];
-
-
-
-      document.getElementById("settleDrinksSummary").innerHTML=drinks.length?drinks.map(d=>d.item_name+' x'+d.qty+' @'+(d.unit_price||0)+' = '+(d.qty*(d.unit_price||0)).toFixed(2)).join('<br>'):'暂无';
-
-
-
+      document.getElementById("settleDrinksFee").textContent=Number(bill.drinks_fee||0).toFixed(2);
+      renderSettleDrinkSummary(bill.drinks||[]);
       updateSettleTotal();
-
-
-
+      fetchInventory();
     });
-
-
-
   }
-
-
-
 }
-
-
-
-
-
-
 
 function saveDrinksModal(){closeDrinksModal();}
 

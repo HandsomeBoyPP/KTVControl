@@ -57,6 +57,37 @@ def init_db():
             created_at TEXT DEFAULT (datetime('now', 'localtime')),
             FOREIGN KEY (member_id) REFERENCES members(id)
         );
+        CREATE TABLE IF NOT EXISTS member_stored_drinks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            member_id INTEGER NOT NULL,
+            item_name TEXT NOT NULL,
+            storage_kind TEXT NOT NULL DEFAULT 'sealed',
+            quantity INTEGER NOT NULL DEFAULT 1,
+            remaining_level TEXT,
+            storage_location TEXT,
+            notes TEXT,
+            status TEXT NOT NULL DEFAULT 'active',
+            stored_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            updated_at TEXT DEFAULT (datetime('now', 'localtime')),
+            FOREIGN KEY (member_id) REFERENCES members(id)
+        );
+        CREATE TABLE IF NOT EXISTS member_storage_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            member_id INTEGER NOT NULL,
+            storage_id INTEGER NOT NULL,
+            action TEXT NOT NULL,
+            item_name TEXT NOT NULL,
+            storage_kind TEXT NOT NULL,
+            quantity INTEGER NOT NULL,
+            remaining_level TEXT,
+            before_quantity INTEGER NOT NULL,
+            after_quantity INTEGER NOT NULL,
+            detail TEXT,
+            created_at TEXT DEFAULT (datetime('now', 'localtime')),
+            FOREIGN KEY (member_id) REFERENCES members(id),
+            FOREIGN KEY (storage_id) REFERENCES member_stored_drinks(id)
+        );
         CREATE TABLE IF NOT EXISTS packages (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
@@ -65,13 +96,28 @@ def init_db():
             price_normal REAL DEFAULT 0,
             created_at TEXT DEFAULT (datetime('now', 'localtime'))
         );
+        CREATE TABLE IF NOT EXISTS package_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            package_id INTEGER NOT NULL,
+            item_type TEXT NOT NULL,
+            inventory_id INTEGER,
+            item_name TEXT NOT NULL,
+            qty INTEGER NOT NULL DEFAULT 1,
+            unit_label TEXT,
+            created_at TEXT DEFAULT (datetime('now', 'localtime')),
+            FOREIGN KEY (package_id) REFERENCES packages(id) ON DELETE CASCADE
+        );
         CREATE TABLE IF NOT EXISTS inventory (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             category TEXT NOT NULL DEFAULT '酒水',
             name TEXT NOT NULL,
+            unit_name TEXT NOT NULL DEFAULT '瓶',
             unit_price REAL DEFAULT 0,
+            case_size INTEGER DEFAULT 0,
+            case_price REAL DEFAULT 0,
             cost_price REAL DEFAULT 0,
             stock INTEGER DEFAULT 0,
+            low_stock INTEGER DEFAULT 5,
             created_at TEXT DEFAULT (datetime('now', 'localtime'))
         );
         CREATE TABLE IF NOT EXISTS billing_records (
@@ -102,9 +148,16 @@ def init_db():
         CREATE TABLE IF NOT EXISTS drink_orders (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             billing_id INTEGER NOT NULL,
+            inventory_id INTEGER,
             item_name TEXT NOT NULL,
             qty INTEGER DEFAULT 1,
             unit_price REAL DEFAULT 0,
+            source TEXT DEFAULT 'manual',
+            package_item_id INTEGER,
+            sale_unit TEXT DEFAULT 'unit',
+            unit_label TEXT DEFAULT '瓶',
+            unit_size INTEGER DEFAULT 1,
+            stock_qty INTEGER DEFAULT 1,
             created_at TEXT DEFAULT (datetime('now', 'localtime')),
             FOREIGN KEY (billing_id) REFERENCES billing_records(id)
         );
@@ -167,6 +220,9 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_bookings_status_open_at ON bookings(status, open_at);
         CREATE INDEX IF NOT EXISTS idx_device_commands_status ON device_commands(status, id);
         CREATE INDEX IF NOT EXISTS idx_staff_status ON staff(status, id);
+        CREATE INDEX IF NOT EXISTS idx_package_items_package ON package_items(package_id, id);
+        CREATE INDEX IF NOT EXISTS idx_member_stored_drinks_member ON member_stored_drinks(member_id, status, expires_at);
+        CREATE INDEX IF NOT EXISTS idx_member_storage_logs_member ON member_storage_logs(member_id, id);
     """)
 
     _migrate_members_password(conn)
@@ -221,13 +277,58 @@ def _migrate_billing_columns(conn: sqlite3.Connection):
 
 def _migrate_management_columns(conn: sqlite3.Connection):
     inventory_columns = {row[1] for row in conn.execute("PRAGMA table_info(inventory)").fetchall()}
-    if "cost_price" not in inventory_columns:
-        conn.execute("ALTER TABLE inventory ADD COLUMN cost_price REAL DEFAULT 0")
+    inventory_required = [
+        ("cost_price", "REAL DEFAULT 0"),
+        ("unit_name", "TEXT DEFAULT '瓶'"),
+        ("case_size", "INTEGER DEFAULT 0"),
+        ("case_price", "REAL DEFAULT 0"),
+        ("low_stock", "INTEGER DEFAULT 5"),
+    ]
+    for column_name, column_type in inventory_required:
+        if column_name not in inventory_columns:
+            conn.execute(f"ALTER TABLE inventory ADD COLUMN {column_name} {column_type}")
+    conn.execute("UPDATE inventory SET unit_name = '瓶' WHERE unit_name IS NULL OR TRIM(unit_name) = ''")
+    conn.execute("UPDATE inventory SET case_size = 0 WHERE case_size IS NULL OR case_size < 2")
+    conn.execute("UPDATE inventory SET case_price = 0 WHERE case_price IS NULL")
+    conn.execute("UPDATE inventory SET low_stock = 5 WHERE low_stock IS NULL OR low_stock < 0")
+
+    drink_columns = {row[1] for row in conn.execute("PRAGMA table_info(drink_orders)").fetchall()}
+    drink_required = [
+        ("inventory_id", "INTEGER"),
+        ("source", "TEXT DEFAULT 'manual'"),
+        ("package_item_id", "INTEGER"),
+        ("sale_unit", "TEXT DEFAULT 'unit'"),
+        ("unit_label", "TEXT DEFAULT '瓶'"),
+        ("unit_size", "INTEGER DEFAULT 1"),
+        ("stock_qty", "INTEGER DEFAULT 1"),
+    ]
+    added_drink_columns = set()
+    for column_name, column_type in drink_required:
+        if column_name not in drink_columns:
+            conn.execute(f"ALTER TABLE drink_orders ADD COLUMN {column_name} {column_type}")
+            added_drink_columns.add(column_name)
+    if "inventory_id" in added_drink_columns:
+        conn.execute(
+            """UPDATE drink_orders
+               SET inventory_id = (
+                   SELECT inventory.id FROM inventory
+                   WHERE inventory.name = drink_orders.item_name
+                   ORDER BY inventory.id LIMIT 1
+               )
+               WHERE inventory_id IS NULL"""
+        )
+    if "stock_qty" in added_drink_columns:
+        conn.execute("UPDATE drink_orders SET stock_qty = qty")
+    conn.execute("UPDATE drink_orders SET source = 'manual' WHERE source IS NULL OR source = ''")
+    conn.execute("UPDATE drink_orders SET sale_unit = 'unit' WHERE sale_unit IS NULL OR sale_unit = ''")
+    conn.execute("UPDATE drink_orders SET unit_label = '瓶' WHERE unit_label IS NULL OR unit_label = ''")
+    conn.execute("UPDATE drink_orders SET unit_size = 1 WHERE unit_size IS NULL OR unit_size < 1")
+    conn.execute("UPDATE drink_orders SET stock_qty = 0 WHERE source = 'package' AND inventory_id IS NULL")
+    conn.execute("UPDATE drink_orders SET stock_qty = qty WHERE source <> 'package' AND (stock_qty IS NULL OR stock_qty < 1)")
 
     staff_columns = {row[1] for row in conn.execute("PRAGMA table_info(staff)").fetchall()}
     if "salary" not in staff_columns:
         conn.execute("ALTER TABLE staff ADD COLUMN salary REAL DEFAULT 0")
-
 def _migrate_device_command_columns(conn: sqlite3.Connection):
     columns = {row[1] for row in conn.execute("PRAGMA table_info(device_commands)").fetchall()}
     if "retryable" not in columns:

@@ -15,12 +15,12 @@ from database import init_db, get_db, log_operation, verify_admin_password
 from models import (
     AddDrinkRequest, BookingRequest, CreateInventoryRequest, CreateMemberRequest, CreateStaffRequest,
     CloseRequest, CreatePackageRequest, DeletePackageRequest, ExtendRequest, OpenRequest,
-    RechargeRequest, ResetMemberPasswordRequest, SaveBillingDraftRequest, SettlementRequest,
-    UpdateBillingRequest, UpdateInventoryRequest, UpdateMemberRequest, UpdatePackageRequest, UpdateStaffRequest,
+    RechargeRequest, ResetMemberPasswordRequest, RetrieveMemberDrinkRequest, SaveBillingDraftRequest, SettlementRequest,
+    StoreMemberDrinkRequest, UpdateBillingRequest, UpdateInventoryRequest, UpdateMemberRequest, UpdatePackageRequest, UpdateStaffRequest,
     VerifyAdminRequest, VerifyMemberRequest,
 )
 from scheduler import (
-    cancel_auto_close, execute_device_command, ktv_get, restore_all_schedules,
+    execute_device_command, ktv_get, restore_all_schedules,
     schedule_auto_close, schedule_booking, start_device_command_worker,
 )
 from state_manager import state_mgr
@@ -423,8 +423,6 @@ async def update_member(member_id: int, req: UpdateMemberRequest):
 
 @app.post("/api/members/{member_id}/reset-password")
 async def reset_member_password(member_id: int, req: ResetMemberPasswordRequest):
-    if not verify_admin_password(req.admin_password):
-        raise HTTPException(403, "管理密码错误")
     conn = get_db()
     try:
         member = conn.execute("SELECT * FROM members WHERE id = ?", (member_id,)).fetchone()
@@ -470,14 +468,277 @@ async def recharge_member(member_id: int, req: RechargeRequest):
         conn.close()
 
 
+def _stored_drink_dict(row, now: datetime | None = None) -> dict:
+    data = dict(row)
+    now = now or datetime.now()
+    expires_at = datetime.fromisoformat(data["expires_at"])
+    data["is_expired"] = expires_at < now
+    data["days_remaining"] = max(0, (expires_at.date() - now.date()).days)
+    return data
+
+
+@app.get("/api/members/{member_id}/stored-drinks")
+async def list_member_stored_drinks(member_id: int):
+    conn = get_db()
+    try:
+        member = conn.execute(
+            "SELECT id, name, phone FROM members WHERE id = ?", (member_id,)
+        ).fetchone()
+        if not member:
+            raise HTTPException(404, "会员不存在")
+        rows = conn.execute(
+            """SELECT * FROM member_stored_drinks
+               WHERE member_id = ? AND status = 'active' AND quantity > 0
+               ORDER BY expires_at, id""",
+            (member_id,),
+        ).fetchall()
+        logs = conn.execute(
+            """SELECT id, storage_id, action, item_name, storage_kind, quantity,
+                      remaining_level, before_quantity, after_quantity, detail, created_at
+               FROM member_storage_logs WHERE member_id = ? ORDER BY id DESC LIMIT 100""",
+            (member_id,),
+        ).fetchall()
+        now = datetime.now()
+        return {
+            "code": 0,
+            "member": dict(member),
+            "data": [_stored_drink_dict(row, now) for row in rows],
+            "logs": [dict(row) for row in logs],
+        }
+    finally:
+        conn.close()
+
+
+@app.post("/api/members/{member_id}/stored-drinks")
+async def store_member_drink(member_id: int, req: StoreMemberDrinkRequest):
+    conn = get_db()
+    try:
+        member = conn.execute("SELECT id, name FROM members WHERE id = ?", (member_id,)).fetchone()
+        if not member:
+            raise HTTPException(404, "会员不存在")
+        stored_at = datetime.now().replace(microsecond=0)
+        expires_at = stored_at + timedelta(days=30)
+        cursor = conn.execute(
+            """INSERT INTO member_stored_drinks
+               (member_id, item_name, storage_kind, quantity, remaining_level,
+                storage_location, notes, stored_at, expires_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                member_id, req.item_name, req.storage_kind, req.quantity,
+                req.remaining_level if req.storage_kind == "opened" else None,
+                req.storage_location or None, req.notes or None,
+                stored_at.isoformat(sep=" "), expires_at.isoformat(sep=" "),
+            ),
+        )
+        storage_id = cursor.lastrowid
+        kind_label = "已开封" if req.storage_kind == "opened" else "未开封"
+        detail = f"{kind_label}；位置={req.storage_location or '未填写'}；有效期30天"
+        if req.notes:
+            detail += f"；备注={req.notes}"
+        conn.execute(
+            """INSERT INTO member_storage_logs
+               (member_id, storage_id, action, item_name, storage_kind, quantity,
+                remaining_level, before_quantity, after_quantity, detail)
+               VALUES (?, ?, 'store', ?, ?, ?, ?, 0, ?, ?)""",
+            (
+                member_id, storage_id, req.item_name, req.storage_kind, req.quantity,
+                req.remaining_level if req.storage_kind == "opened" else None,
+                req.quantity, detail,
+            ),
+        )
+        conn.commit()
+        log_operation(
+            "store_member_drink", None,
+            f"会员存酒 member={member['name']} id={member_id} 酒水={req.item_name} 数量={req.quantity} 到期={expires_at:%Y-%m-%d}",
+        )
+        return {
+            "code": 0,
+            "msg": "存酒成功",
+            "id": storage_id,
+            "expires_at": expires_at.isoformat(sep=" "),
+        }
+    finally:
+        conn.close()
+
+
+@app.post("/api/members/{member_id}/stored-drinks/{storage_id}/retrieve")
+async def retrieve_member_drink(member_id: int, storage_id: int, req: RetrieveMemberDrinkRequest):
+    conn = get_db()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        member = conn.execute("SELECT id, name FROM members WHERE id = ?", (member_id,)).fetchone()
+        if not member:
+            raise HTTPException(404, "会员不存在")
+        stored = conn.execute(
+            """SELECT * FROM member_stored_drinks
+               WHERE id = ? AND member_id = ? AND status = 'active'""",
+            (storage_id, member_id),
+        ).fetchone()
+        if not stored or stored["quantity"] <= 0:
+            raise HTTPException(404, "存酒记录不存在或已全部取走")
+        if stored["storage_kind"] == "opened" and req.quantity != stored["quantity"]:
+            raise HTTPException(400, "已开封酒需要整条取出")
+        if req.quantity > stored["quantity"]:
+            raise HTTPException(400, f"取酒数量不能超过当前剩余 {stored['quantity']} 瓶")
+        before_quantity = stored["quantity"]
+        after_quantity = before_quantity - req.quantity
+        status = "retrieved" if after_quantity == 0 else "active"
+        conn.execute(
+            """UPDATE member_stored_drinks
+               SET quantity = ?, status = ?, updated_at = datetime('now', 'localtime')
+               WHERE id = ?""",
+            (after_quantity, status, storage_id),
+        )
+        detail = req.notes or "会员到店取酒"
+        conn.execute(
+            """INSERT INTO member_storage_logs
+               (member_id, storage_id, action, item_name, storage_kind, quantity,
+                remaining_level, before_quantity, after_quantity, detail)
+               VALUES (?, ?, 'retrieve', ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                member_id, storage_id, stored["item_name"], stored["storage_kind"],
+                req.quantity, stored["remaining_level"], before_quantity, after_quantity, detail,
+            ),
+        )
+        conn.commit()
+        log_operation(
+            "retrieve_member_drink", None,
+            f"会员取酒 member={member['name']} id={member_id} 酒水={stored['item_name']} 数量={req.quantity} 剩余={after_quantity}",
+        )
+        return {"code": 0, "msg": "取酒成功", "remaining_quantity": after_quantity}
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
 # ---- Package Routes ----
+
+def _package_items_for(conn, package_id: int) -> list[dict]:
+    rows = conn.execute(
+        """SELECT id, package_id, item_type, inventory_id, item_name, qty, unit_label
+           FROM package_items WHERE package_id = ? ORDER BY item_type, id""",
+        (package_id,),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def _replace_package_items(conn, package_id: int, items: list):
+    conn.execute("DELETE FROM package_items WHERE package_id = ?", (package_id,))
+    for item in items:
+        if item.item_type == "drink":
+            inventory = conn.execute(
+                "SELECT id, category, name, unit_name FROM inventory WHERE id = ?",
+                (item.inventory_id,),
+            ).fetchone()
+            if not inventory:
+                raise HTTPException(400, "套餐酒水对应的库存商品不存在")
+            if inventory["category"] != "酒水":
+                raise HTTPException(400, f"{inventory['name']}不是酒水分类，不能联动酒水库存")
+            inventory_id = inventory["id"]
+            item_name = inventory["name"]
+            unit_label = inventory["unit_name"] or "瓶"
+        else:
+            inventory_id = None
+            item_name = (item.item_name or "").strip()
+            unit_label = "份"
+        conn.execute(
+            """INSERT INTO package_items
+               (package_id, item_type, inventory_id, item_name, qty, unit_label)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (package_id, item.item_type, inventory_id, item_name, item.qty, unit_label),
+        )
+
+
+def _sync_billing_package_items(conn, billing_id: int, package_id: int):
+    old_rows = conn.execute(
+        """SELECT inventory_id, stock_qty FROM drink_orders
+           WHERE billing_id = ? AND source = 'package'""",
+        (billing_id,),
+    ).fetchall()
+    for row in old_rows:
+        if row["inventory_id"] and int(row["stock_qty"] or 0) > 0:
+            conn.execute(
+                "UPDATE inventory SET stock = stock + ? WHERE id = ?",
+                (int(row["stock_qty"]), row["inventory_id"]),
+            )
+    conn.execute(
+        "DELETE FROM drink_orders WHERE billing_id = ? AND source = 'package'",
+        (billing_id,),
+    )
+
+    package_items = _package_items_for(conn, package_id)
+    inventory_needs: dict[int, int] = {}
+    inventories: dict[int, dict] = {}
+    for item in package_items:
+        if item["item_type"] != "drink":
+            continue
+        inventory_id = item["inventory_id"]
+        inventory_needs[inventory_id] = inventory_needs.get(inventory_id, 0) + int(item["qty"])
+
+    for inventory_id, needed in inventory_needs.items():
+        inventory = conn.execute("SELECT * FROM inventory WHERE id = ?", (inventory_id,)).fetchone()
+        if not inventory:
+            raise HTTPException(400, "套餐中的酒水库存商品已被删除，请先修改套餐")
+        if int(inventory["stock"] or 0) < needed:
+            raise HTTPException(
+                409,
+                f"套餐酒水库存不足：{inventory['name']}需要{needed}{inventory['unit_name'] or '瓶'}，"
+                f"当前仅有{inventory['stock']}{inventory['unit_name'] or '瓶'}",
+            )
+        inventories[inventory_id] = dict(inventory)
+
+    for inventory_id, needed in inventory_needs.items():
+        updated = conn.execute(
+            "UPDATE inventory SET stock = stock - ? WHERE id = ? AND stock >= ?",
+            (needed, inventory_id, needed),
+        )
+        if updated.rowcount != 1:
+            raise HTTPException(409, "套餐酒水库存刚刚发生变化，请重试")
+
+    for item in package_items:
+        if item["item_type"] == "drink":
+            inventory = inventories[item["inventory_id"]]
+            stock_qty = int(item["qty"])
+            unit_label = inventory["unit_name"] or item["unit_label"] or "瓶"
+        else:
+            stock_qty = 0
+            unit_label = item["unit_label"] or "份"
+        conn.execute(
+            """INSERT INTO drink_orders
+               (billing_id, inventory_id, item_name, qty, unit_price, source,
+                package_item_id, sale_unit, unit_label, unit_size, stock_qty)
+               VALUES (?, ?, ?, ?, 0, 'package', ?, 'unit', ?, 1, ?)""",
+            (
+                billing_id, item["inventory_id"], item["item_name"], item["qty"],
+                item["id"], unit_label, stock_qty,
+            ),
+        )
+
+    drinks_fee = round(float(conn.execute(
+        "SELECT COALESCE(SUM(qty * unit_price), 0) FROM drink_orders WHERE billing_id = ?",
+        (billing_id,),
+    ).fetchone()[0] or 0), 2)
+    conn.execute(
+        "UPDATE billing_records SET package_id = ?, drinks_fee = ? WHERE id = ? AND status = 'open'",
+        (package_id, drinks_fee, billing_id),
+    )
+    return drinks_fee
+
 
 @app.get("/api/packages")
 async def list_packages():
     conn = get_db()
     try:
-        rows = conn.execute("SELECT id, name, type, duration_minutes, price_normal, created_at FROM packages ORDER BY type, duration_minutes").fetchall()
-        return {"code": 0, "data": [dict(r) for r in rows]}
+        rows = conn.execute(
+            "SELECT id, name, type, duration_minutes, price_normal, created_at FROM packages ORDER BY type, duration_minutes"
+        ).fetchall()
+        result = []
+        for row in rows:
+            package = dict(row)
+            package["items"] = _package_items_for(conn, row["id"])
+            result.append(package)
+        return {"code": 0, "data": result}
     finally:
         conn.close()
 
@@ -486,40 +747,49 @@ async def list_packages():
 async def create_package(req: CreatePackageRequest):
     conn = get_db()
     try:
-        conn.execute(
+        cursor = conn.execute(
             "INSERT INTO packages (name, type, duration_minutes, price_normal) VALUES (?, ?, ?, ?)",
-            (req.name, req.type, req.duration_minutes, req.price_normal)
+            (req.name, req.type, req.duration_minutes, req.price_normal),
         )
+        package_id = cursor.lastrowid
+        _replace_package_items(conn, package_id, req.items)
         conn.commit()
-        pid = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-        log_operation("create_package", None, f"新增套餐 {req.name} type={req.type}")
-        return {"code": 0, "msg": "ok", "id": pid}
+        log_operation("create_package", None, f"新增套餐 {req.name} type={req.type} items={len(req.items)}")
+        return {"code": 0, "msg": "ok", "id": package_id}
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 
 
 @app.put("/api/packages/{package_id}")
 async def update_package(package_id: int, req: UpdatePackageRequest):
-    if not verify_admin_password(req.admin_password):
-        raise HTTPException(403, "管理密码错误")
     conn = get_db()
     try:
-        pkg = conn.execute("SELECT * FROM packages WHERE id = ?", (package_id,)).fetchone()
-        if not pkg:
+        package = conn.execute("SELECT * FROM packages WHERE id = ?", (package_id,)).fetchone()
+        if not package:
             raise HTTPException(404, "套餐不存在")
-        fields = []
-        values = []
-        for k in ["name", "type", "duration_minutes", "price_normal"]:
-            v = getattr(req, k, None)
-            if v is not None:
-                fields.append(f"{k} = ?")
-                values.append(v)
+        fields, values = [], []
+        for field in ["name", "type", "duration_minutes", "price_normal"]:
+            value = getattr(req, field, None)
+            if value is not None:
+                fields.append(f"{field} = ?")
+                values.append(value)
         if fields:
             values.append(package_id)
             conn.execute(f"UPDATE packages SET {', '.join(fields)} WHERE id = ?", values)
-            conn.commit()
-        log_operation("update_package", None, f"修改套餐 id={package_id}")
+        if req.items is not None:
+            _replace_package_items(conn, package_id, req.items)
+        conn.commit()
+        log_operation(
+            "update_package", None,
+            f"修改套餐 id={package_id}" + (f" items={len(req.items)}" if req.items is not None else ""),
+        )
         return {"code": 0, "msg": "ok"}
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 
@@ -530,16 +800,15 @@ async def delete_package(package_id: int, req: DeletePackageRequest):
         raise HTTPException(403, "管理密码错误")
     conn = get_db()
     try:
-        pkg = conn.execute("SELECT * FROM packages WHERE id = ?", (package_id,)).fetchone()
-        if not pkg:
+        package = conn.execute("SELECT * FROM packages WHERE id = ?", (package_id,)).fetchone()
+        if not package:
             raise HTTPException(404, "套餐不存在")
         conn.execute("DELETE FROM packages WHERE id = ?", (package_id,))
         conn.commit()
-        log_operation("delete_package", None, f"删除套餐 {pkg['name']}")
+        log_operation("delete_package", None, f"删除套餐 {package['name']}")
         return {"code": 0, "msg": "ok"}
     finally:
         conn.close()
-
 
 # ---- Inventory Routes ----
 
@@ -557,17 +826,27 @@ async def list_inventory():
 async def create_inventory(req: CreateInventoryRequest):
     conn = get_db()
     try:
-        conn.execute(
-            "INSERT INTO inventory (category, name, unit_price, cost_price, stock) VALUES (?, ?, ?, ?, ?)",
-            (req.category, req.name, req.unit_price, req.cost_price, req.stock)
+        case_size = req.case_size if req.case_size >= 2 else 0
+        case_price = req.case_price if case_size else 0
+        cursor = conn.execute(
+            """INSERT INTO inventory
+               (category, name, unit_name, unit_price, case_size, case_price,
+                cost_price, stock, low_stock)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                req.category, req.name.strip(), req.unit_name.strip(), req.unit_price,
+                case_size, case_price, req.cost_price, req.stock, req.low_stock,
+            ),
         )
         conn.commit()
-        iid = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-        log_operation("create_inventory", None, f"新增库存 {req.name} cat={req.category}")
-        return {"code": 0, "msg": "ok", "id": iid}
+        item_id = cursor.lastrowid
+        log_operation(
+            "create_inventory", None,
+            f"新增库存 {req.name} 单位={req.unit_name} 箱规={case_size} 库存={req.stock}",
+        )
+        return {"code": 0, "msg": "ok", "id": item_id}
     finally:
         conn.close()
-
 
 @app.put("/api/inventory/{item_id}")
 async def update_inventory(item_id: int, req: UpdateInventoryRequest):
@@ -579,12 +858,27 @@ async def update_inventory(item_id: int, req: UpdateInventoryRequest):
         stock_changed = req.stock is not None and req.stock != item["stock"]
         if stock_changed and not verify_admin_password(req.admin_password or ""):
             raise HTTPException(403, "手动修改库存量需要正确的管理密码")
+
+        updates = req.model_dump(exclude_unset=True, exclude_none=True)
+        updates.pop("admin_password", None)
+        if "unit_name" in updates:
+            updates["unit_name"] = updates["unit_name"].strip()
+        if "name" in updates:
+            updates["name"] = updates["name"].strip()
+        if "case_size" in updates and updates["case_size"] < 2:
+            updates["case_size"] = 0
+            updates["case_price"] = 0
+
+        allowed_fields = {
+            "category", "name", "unit_name", "unit_price", "case_size",
+            "case_price", "cost_price", "stock", "low_stock",
+        }
         fields, values = [], []
-        for field in ["category", "name", "unit_price", "cost_price", "stock"]:
-            value = getattr(req, field, None)
-            if value is not None:
-                fields.append(f"{field} = ?")
-                values.append(value)
+        for field, value in updates.items():
+            if field not in allowed_fields:
+                continue
+            fields.append(f"{field} = ?")
+            values.append(value)
         if fields:
             values.append(item_id)
             conn.execute(f"UPDATE inventory SET {', '.join(fields)} WHERE id = ?", values)
@@ -597,7 +891,6 @@ async def update_inventory(item_id: int, req: UpdateInventoryRequest):
     finally:
         conn.close()
 
-
 @app.delete("/api/inventory/{item_id}")
 async def delete_inventory(item_id: int):
     conn = get_db()
@@ -605,6 +898,11 @@ async def delete_inventory(item_id: int):
         item = conn.execute("SELECT * FROM inventory WHERE id = ?", (item_id,)).fetchone()
         if not item:
             raise HTTPException(404, "库存物品不存在")
+        package_use = conn.execute(
+            "SELECT package_id FROM package_items WHERE inventory_id = ? LIMIT 1", (item_id,)
+        ).fetchone()
+        if package_use:
+            raise HTTPException(409, "该酒水正在套餐中使用，请先修改相关套餐后再删除")
         conn.execute("DELETE FROM inventory WHERE id = ?", (item_id,))
         conn.commit()
         log_operation("delete_inventory", None, f"删除库存 {item['name']}")
@@ -708,21 +1006,18 @@ async def save_billing_draft(billing_id: int, req: SaveBillingDraftRequest):
             "SELECT * FROM billing_records WHERE id = ? AND status = 'open'", (billing_id,)
         ).fetchone()
         if not billing:
-            raise HTTPException(404, "\u8d26\u5355\u4e0d\u5b58\u5728\u6216\u5df2\u7ed3\u8d26")
+            raise HTTPException(404, "账单不存在或已结账")
         package = conn.execute("SELECT * FROM packages WHERE id = ?", (req.package_id,)).fetchone()
         if not package or package["type"] != "open":
-            raise HTTPException(400, "\u5f00\u53f0\u5957\u9910\u4e0d\u5b58\u5728")
+            raise HTTPException(400, "开台套餐不存在")
 
         room_fee = _get_package_price(dict(package))
-        drinks_fee = round(float(conn.execute(
-            "SELECT COALESCE(SUM(qty * unit_price), 0) FROM drink_orders WHERE billing_id = ?",
-            (billing_id,),
-        ).fetchone()[0] or 0), 2)
+        drinks_fee = _sync_billing_package_items(conn, billing_id, req.package_id)
         subtotal = round(room_fee + drinks_fee, 2)
         discount = round(req.discount, 2)
         max_discount = round(subtotal * 0.2, 2)
         if discount > max_discount:
-            raise HTTPException(400, f"\u4f18\u60e0\u91d1\u989d\u4e0d\u80fd\u8d85\u8fc7\u603b\u989d\u768420% (\u6700\u591a{max_discount})")
+            raise HTTPException(400, f"优惠金额不能超过总额的20%（最多{max_discount}）")
         total = round(subtotal - discount, 2)
 
         conn.execute(
@@ -732,6 +1027,9 @@ async def save_billing_draft(billing_id: int, req: SaveBillingDraftRequest):
                WHERE id = ? AND status = 'open'""",
             (req.package_id, room_fee, drinks_fee, total, discount, req.payment_method, billing_id),
         )
+        drinks = [dict(row) for row in conn.execute(
+            "SELECT * FROM drink_orders WHERE billing_id = ? ORDER BY id", (billing_id,)
+        ).fetchall()]
         conn.commit()
         log_operation(
             "save_billing_draft", billing["room_no"],
@@ -743,13 +1041,13 @@ async def save_billing_draft(billing_id: int, req: SaveBillingDraftRequest):
             "package_id": req.package_id, "room_fee": room_fee,
             "drinks_fee": drinks_fee, "discount": discount,
             "total": total, "payment_method": req.payment_method,
+            "drinks": drinks,
         }
     except Exception:
         conn.rollback()
         raise
     finally:
         conn.close()
-
 
 @app.put("/api/billing/{billing_id}")
 async def update_active_billing(billing_id: int, req: UpdateBillingRequest):
@@ -788,30 +1086,55 @@ async def add_drink(req: AddDrinkRequest):
         ).fetchone()
         if not billing:
             raise HTTPException(404, "账单不存在或已结账")
-        inv = conn.execute(
-            "SELECT * FROM inventory WHERE name = ? AND stock >= ?", (req.item_name, req.qty)
-        ).fetchone()
+        inv = conn.execute("SELECT * FROM inventory WHERE id = ?", (req.inventory_id,)).fetchone()
         if not inv:
-            raise HTTPException(400, "库存不足或物品不存在")
+            raise HTTPException(404, "库存物品不存在")
+
+        if req.sale_unit == "case":
+            unit_size = int(inv["case_size"] or 0)
+            if unit_size < 2 or float(inv["case_price"] or 0) <= 0:
+                raise HTTPException(400, "该物品没有设置有效的整箱规格和价格")
+            unit_price = round(float(inv["case_price"] or 0), 2)
+            unit_label = "箱"
+        else:
+            unit_size = 1
+            unit_price = round(float(inv["unit_price"] or 0), 2)
+            unit_label = inv["unit_name"] or "瓶"
+
+        stock_qty = req.qty * unit_size
         updated = conn.execute(
             "UPDATE inventory SET stock = stock - ? WHERE id = ? AND stock >= ?",
-            (req.qty, inv["id"], req.qty),
+            (stock_qty, inv["id"], stock_qty),
         )
         if updated.rowcount != 1:
-            raise HTTPException(409, "库存刚刚发生变化，请重试")
-        price = float(inv["unit_price"] or 0)
-        conn.execute(
-            "INSERT INTO drink_orders (billing_id, item_name, qty, unit_price) VALUES (?, ?, ?, ?)",
-            (req.billing_id, req.item_name, req.qty, price),
+            raise HTTPException(409, f"库存不足，需要{stock_qty}{inv['unit_name'] or '瓶'}")
+
+        amount = round(req.qty * unit_price, 2)
+        cursor = conn.execute(
+            """INSERT INTO drink_orders
+               (billing_id, inventory_id, item_name, qty, unit_price, sale_unit,
+                unit_label, unit_size, stock_qty)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                req.billing_id, inv["id"], inv["name"], req.qty, unit_price,
+                req.sale_unit, unit_label, unit_size, stock_qty,
+            ),
         )
         conn.execute(
             "UPDATE billing_records SET drinks_fee = drinks_fee + ? WHERE id = ?",
-            (round(req.qty * price, 2), req.billing_id),
+            (amount, req.billing_id),
         )
         conn.commit()
-        label = "赠送" if price == 0 else "添加"
-        log_operation("add_drink", billing["room_no"], f"{label} {req.item_name} x{req.qty} @{price} billing={req.billing_id}")
-        return {"code": 0, "msg": "ok"}
+        label = "赠送" if unit_price == 0 else "添加"
+        log_operation(
+            "add_drink", billing["room_no"],
+            f"{label} {inv['name']} x{req.qty}{unit_label} @{unit_price} "
+            f"扣库={stock_qty}{inv['unit_name'] or '瓶'} billing={req.billing_id}",
+        )
+        return {
+            "code": 0, "msg": "ok", "id": cursor.lastrowid,
+            "stock_deducted": stock_qty, "amount": amount,
+        }
     except Exception:
         conn.rollback()
         raise
@@ -824,23 +1147,38 @@ async def delete_drink(drink_id: int):
         drink = conn.execute("SELECT * FROM drink_orders WHERE id = ?", (drink_id,)).fetchone()
         if not drink:
             raise HTTPException(404, "明细不存在")
+        if drink["source"] == "package":
+            raise HTTPException(400, "套餐内含项目不能单独删除，请更换或修改套餐")
         billing = conn.execute(
             "SELECT * FROM billing_records WHERE id = ? AND status = 'open'", (drink["billing_id"],)
         ).fetchone()
         if not billing:
             raise HTTPException(400, "账单已结账，无法修改")
+
         amount = round(drink["qty"] * drink["unit_price"], 2)
+        stock_qty = int(drink["stock_qty"] or drink["qty"])
         conn.execute(
             "UPDATE billing_records SET drinks_fee = MAX(0, drinks_fee - ?) WHERE id = ?",
             (amount, drink["billing_id"]),
         )
-        conn.execute(
-            "UPDATE inventory SET stock = stock + ? WHERE name = ?", (drink["qty"], drink["item_name"])
-        )
+        if drink["inventory_id"]:
+            conn.execute(
+                "UPDATE inventory SET stock = stock + ? WHERE id = ?",
+                (stock_qty, drink["inventory_id"]),
+            )
+        else:
+            conn.execute(
+                "UPDATE inventory SET stock = stock + ? WHERE name = ?",
+                (stock_qty, drink["item_name"]),
+            )
         conn.execute("DELETE FROM drink_orders WHERE id = ?", (drink_id,))
         conn.commit()
-        log_operation("delete_drink", billing["room_no"], f"删除明细 {drink['item_name']} x{drink['qty']}")
-        return {"code": 0, "msg": "ok"}
+        log_operation(
+            "delete_drink", billing["room_no"],
+            f"删除明细 {drink['item_name']} x{drink['qty']}{drink['unit_label'] or ''} "
+            f"退库={stock_qty}",
+        )
+        return {"code": 0, "msg": "ok", "stock_returned": stock_qty}
     except Exception:
         conn.rollback()
         raise
@@ -860,13 +1198,7 @@ async def settle_billing(req: SettlementRequest):
             raise HTTPException(400, "开台套餐不存在")
 
         room_fee = _get_package_price(dict(pkg))
-        drinks_fee = float(
-            conn.execute(
-                "SELECT COALESCE(SUM(qty * unit_price), 0) FROM drink_orders WHERE billing_id = ?",
-                (req.billing_id,),
-            ).fetchone()[0] or 0
-        )
-        drinks_fee = round(drinks_fee, 2)
+        drinks_fee = _sync_billing_package_items(conn, req.billing_id, req.package_id)
         subtotal = round(room_fee + drinks_fee, 2)
         discount = round(req.discount, 2)
         max_discount = round(subtotal * 0.2, 2)
@@ -932,7 +1264,6 @@ async def settle_billing(req: SettlementRequest):
         conn.commit()
 
         room_name = billing["room_no"]
-        cancel_auto_close(billing["room_ip"] or "", room_name)
         member_detail = ""
         if settlement_member_id is not None:
             member_detail = (
