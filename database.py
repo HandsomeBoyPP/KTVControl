@@ -291,7 +291,9 @@ def _migrate_management_columns(conn: sqlite3.Connection):
     conn.execute("UPDATE inventory SET case_size = 0 WHERE case_size IS NULL OR case_size < 2")
     conn.execute("UPDATE inventory SET case_price = 0 WHERE case_price IS NULL")
     conn.execute("UPDATE inventory SET low_stock = 5 WHERE low_stock IS NULL OR low_stock < 0")
-
+    conn.execute("UPDATE inventory SET unit_name = '瓶' WHERE category IN ('酒水', '饮料')")
+    conn.execute("UPDATE inventory SET unit_name = '份' WHERE category IN ('零食', '水果')")
+    conn.execute("UPDATE inventory SET case_size = 0, case_price = 0 WHERE category <> '酒水'")
     drink_columns = {row[1] for row in conn.execute("PRAGMA table_info(drink_orders)").fetchall()}
     drink_required = [
         ("inventory_id", "INTEGER"),
@@ -324,7 +326,7 @@ def _migrate_management_columns(conn: sqlite3.Connection):
     conn.execute("UPDATE drink_orders SET unit_label = '瓶' WHERE unit_label IS NULL OR unit_label = ''")
     conn.execute("UPDATE drink_orders SET unit_size = 1 WHERE unit_size IS NULL OR unit_size < 1")
     conn.execute("UPDATE drink_orders SET stock_qty = 0 WHERE source = 'package' AND inventory_id IS NULL")
-    conn.execute("UPDATE drink_orders SET stock_qty = qty WHERE source <> 'package' AND (stock_qty IS NULL OR stock_qty < 1)")
+    conn.execute("UPDATE drink_orders SET stock_qty = qty WHERE source <> 'package' AND stock_qty IS NULL")
 
     staff_columns = {row[1] for row in conn.execute("PRAGMA table_info(staff)").fetchall()}
     if "salary" not in staff_columns:

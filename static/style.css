@@ -590,3 +590,15 @@ body {
   .stored-drink-notes { grid-column: 1 / -1; }
   .stored-drink-submit { grid-column: 1 / -1; }
 }
+
+.inventory-unit-hint {
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-dim);
+  background: rgba(0,0,0,.1);
+  font-size: 13px;
+}

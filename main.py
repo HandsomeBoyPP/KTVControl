@@ -29,6 +29,16 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger("ktv")
 
 
+_INVENTORY_UNITS = {"酒水": "瓶", "饮料": "瓶", "零食": "份", "水果": "份"}
+
+
+def _inventory_unit(category: str) -> str:
+    return _INVENTORY_UNITS.get(category, "份")
+
+
+def _inventory_tracks_stock(category: str) -> bool:
+    return category in {"酒水", "饮料"}
+
 def _get_package_price(pkg: dict) -> float:
     return float(pkg.get("price_normal", 0) or 0)
 
@@ -633,8 +643,8 @@ def _replace_package_items(conn, package_id: int, items: list):
             ).fetchone()
             if not inventory:
                 raise HTTPException(400, "套餐酒水对应的库存商品不存在")
-            if inventory["category"] != "酒水":
-                raise HTTPException(400, f"{inventory['name']}不是酒水分类，不能联动酒水库存")
+            if inventory["category"] not in {"酒水", "饮料"}:
+                raise HTTPException(400, f"{inventory['name']}不是酒水或饮料分类，不能加入套餐酒水")
             inventory_id = inventory["id"]
             item_name = inventory["name"]
             unit_label = inventory["unit_name"] or "瓶"
@@ -826,7 +836,8 @@ async def list_inventory():
 async def create_inventory(req: CreateInventoryRequest):
     conn = get_db()
     try:
-        case_size = req.case_size if req.case_size >= 2 else 0
+        unit_name = _inventory_unit(req.category)
+        case_size = req.case_size if req.category == "酒水" and req.case_size >= 2 else 0
         case_price = req.case_price if case_size else 0
         cursor = conn.execute(
             """INSERT INTO inventory
@@ -834,7 +845,7 @@ async def create_inventory(req: CreateInventoryRequest):
                 cost_price, stock, low_stock)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
-                req.category, req.name.strip(), req.unit_name.strip(), req.unit_price,
+                req.category, req.name.strip(), unit_name, req.unit_price,
                 case_size, case_price, req.cost_price, req.stock, req.low_stock,
             ),
         )
@@ -842,7 +853,7 @@ async def create_inventory(req: CreateInventoryRequest):
         item_id = cursor.lastrowid
         log_operation(
             "create_inventory", None,
-            f"新增库存 {req.name} 单位={req.unit_name} 箱规={case_size} 库存={req.stock}",
+            f"新增库存 {req.name} 单位={unit_name} 箱规={case_size} 库存={req.stock}",
         )
         return {"code": 0, "msg": "ok", "id": item_id}
     finally:
@@ -861,14 +872,16 @@ async def update_inventory(item_id: int, req: UpdateInventoryRequest):
 
         updates = req.model_dump(exclude_unset=True, exclude_none=True)
         updates.pop("admin_password", None)
-        if "unit_name" in updates:
-            updates["unit_name"] = updates["unit_name"].strip()
         if "name" in updates:
             updates["name"] = updates["name"].strip()
-        if "case_size" in updates and updates["case_size"] < 2:
+        effective_category = updates.get("category", item["category"])
+        updates["unit_name"] = _inventory_unit(effective_category)
+        if effective_category != "酒水":
             updates["case_size"] = 0
             updates["case_price"] = 0
-
+        elif "case_size" in updates and updates["case_size"] < 2:
+            updates["case_size"] = 0
+            updates["case_price"] = 0
         allowed_fields = {
             "category", "name", "unit_name", "unit_price", "case_size",
             "case_price", "cost_price", "stock", "low_stock",
@@ -1091,6 +1104,8 @@ async def add_drink(req: AddDrinkRequest):
             raise HTTPException(404, "库存物品不存在")
 
         if req.sale_unit == "case":
+            if inv["category"] != "酒水":
+                raise HTTPException(400, "只有酒水分类可以整箱销售")
             unit_size = int(inv["case_size"] or 0)
             if unit_size < 2 or float(inv["case_price"] or 0) <= 0:
                 raise HTTPException(400, "该物品没有设置有效的整箱规格和价格")
@@ -1099,15 +1114,16 @@ async def add_drink(req: AddDrinkRequest):
         else:
             unit_size = 1
             unit_price = round(float(inv["unit_price"] or 0), 2)
-            unit_label = inv["unit_name"] or "瓶"
+            unit_label = inv["unit_name"] or _inventory_unit(inv["category"])
 
-        stock_qty = req.qty * unit_size
-        updated = conn.execute(
-            "UPDATE inventory SET stock = stock - ? WHERE id = ? AND stock >= ?",
-            (stock_qty, inv["id"], stock_qty),
-        )
-        if updated.rowcount != 1:
-            raise HTTPException(409, f"库存不足，需要{stock_qty}{inv['unit_name'] or '瓶'}")
+        stock_qty = req.qty * unit_size if _inventory_tracks_stock(inv["category"]) else 0
+        if stock_qty > 0:
+            updated = conn.execute(
+                "UPDATE inventory SET stock = stock - ? WHERE id = ? AND stock >= ?",
+                (stock_qty, inv["id"], stock_qty),
+            )
+            if updated.rowcount != 1:
+                raise HTTPException(409, f"库存不足，需要{stock_qty}{inv['unit_name'] or _inventory_unit(inv['category'])}")
 
         amount = round(req.qty * unit_price, 2)
         cursor = conn.execute(
@@ -1126,10 +1142,11 @@ async def add_drink(req: AddDrinkRequest):
         )
         conn.commit()
         label = "赠送" if unit_price == 0 else "添加"
+        stock_detail = f"{stock_qty}{inv['unit_name'] or _inventory_unit(inv['category'])}" if stock_qty > 0 else "不联动库存"
         log_operation(
             "add_drink", billing["room_no"],
             f"{label} {inv['name']} x{req.qty}{unit_label} @{unit_price} "
-            f"扣库={stock_qty}{inv['unit_name'] or '瓶'} billing={req.billing_id}",
+            f"扣库={stock_detail} billing={req.billing_id}",
         )
         return {
             "code": 0, "msg": "ok", "id": cursor.lastrowid,
@@ -1156,17 +1173,17 @@ async def delete_drink(drink_id: int):
             raise HTTPException(400, "账单已结账，无法修改")
 
         amount = round(drink["qty"] * drink["unit_price"], 2)
-        stock_qty = int(drink["stock_qty"] or drink["qty"])
+        stock_qty = int(drink["stock_qty"] if drink["stock_qty"] is not None else drink["qty"])
         conn.execute(
             "UPDATE billing_records SET drinks_fee = MAX(0, drinks_fee - ?) WHERE id = ?",
             (amount, drink["billing_id"]),
         )
-        if drink["inventory_id"]:
+        if stock_qty > 0 and drink["inventory_id"]:
             conn.execute(
                 "UPDATE inventory SET stock = stock + ? WHERE id = ?",
                 (stock_qty, drink["inventory_id"]),
             )
-        else:
+        elif stock_qty > 0:
             conn.execute(
                 "UPDATE inventory SET stock = stock + ? WHERE name = ?",
                 (stock_qty, drink["item_name"]),

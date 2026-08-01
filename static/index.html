@@ -159,7 +159,7 @@
     </div>
     <div class="table-wrap">
       <table class="data-table" id="inventoryTable">
-        <thead><tr><th>分类</th><th>名称</th><th>基础单位</th><th>单价</th><th>整箱规格</th><th>整箱价</th><th class="admin-only" style="display:none;">成本/基础单位</th><th>库存</th><th>操作</th></tr></thead>
+        <thead><tr><th>分类</th><th>名称</th><th>单位</th><th>零售价</th><th>整箱规格</th><th>整箱价</th><th class="admin-only" style="display:none;">单位成本</th><th>库存</th><th>操作</th></tr></thead>
         <tbody><tr><td colspan="9" class="empty-hint">暂无库存</td></tr></tbody>
       </table>
     </div>
@@ -498,9 +498,9 @@
       <div class="form-group"><label>套餐总价</label><input type="number" id="pkgPriceNormal" value="0" min="0" step="0.01"></div>
     </div>
     <div style="margin-top:12px;padding:12px;background:rgba(0,0,0,.14);border-radius:8px;">
-      <h4 style="margin:0 0 8px;">套餐酒水 <small style="color:var(--text-dim);font-weight:400;">保存账单时联动扣库存</small></h4>
+      <h4 style="margin:0 0 8px;">套餐酒水/饮料 <small style="color:var(--text-dim);font-weight:400;">保存账单时联动扣库存</small></h4>
       <div style="display:grid;grid-template-columns:1fr 90px auto;gap:8px;align-items:end;">
-        <div class="form-group" style="margin:0;"><label>酒水商品</label><select id="pkgDrinkInventory"></select></div>
+        <div class="form-group" style="margin:0;"><label>酒水/饮料商品</label><select id="pkgDrinkInventory"></select></div>
         <div class="form-group" style="margin:0;"><label>数量</label><input type="number" id="pkgDrinkQty" value="1" min="1"></div>
         <button type="button" class="btn btn-sm btn-outline" onclick="addPackageDrinkItem()">添加酒水</button>
       </div>
@@ -553,24 +553,26 @@
   <div class="modal" style="max-width:620px;">
     <h3 id="inventoryModalTitle">新增库存物品</h3>
     <input type="hidden" id="editInvId">
-    <div class="form-group"><label>分类</label><select id="invCategory"><option value="酒水">酒水</option><option value="零食">零食</option><option value="水果">水果</option></select></div>
-    <div class="form-group"><label>名称</label><input type="text" id="invName" placeholder="例如：百威"></div>
+    <input type="hidden" id="invUnitName" value="瓶">
+    <div class="form-group"><label>分类</label><select id="invCategory" onchange="onInventoryCategoryChange()"><option value="酒水">酒水</option><option value="饮料">饮料</option><option value="零食">零食</option><option value="水果">水果</option></select></div>
+    <div class="form-group"><label>名称</label><input type="text" id="invName" placeholder="例如：百威、可乐、薯片、果盘"></div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
-      <div class="form-group"><label>基础单位</label><input type="text" id="invUnitName" value="瓶" maxlength="8" placeholder="瓶、罐、份"></div>
-      <div class="form-group"><label>单价（元/基础单位）</label><input type="number" id="invPrice" value="0" min="0" step="0.01"></div>
-      <div class="form-group"><label>每箱数量</label><input type="number" id="invCaseSize" value="0" min="0"><small style="color:var(--text-dim);">不按箱销售填0</small></div>
-      <div class="form-group"><label>整箱售价（元）</label><input type="number" id="invCasePrice" value="0" min="0" step="0.01"></div>
-      <div class="form-group"><label>库存总数（按基础单位）</label><input type="number" id="invStock" value="0" min="0"><small style="color:var(--text-dim);">例如5箱×24瓶，应填写120</small></div>
+      <div class="form-group"><label>计量单位</label><div id="invUnitHint" class="inventory-unit-hint">瓶（按分类自动设置）</div></div>
+      <div class="form-group"><label>零售价（元）</label><input type="number" id="invPrice" value="0" min="0" step="0.01"></div>
+      <div class="form-group"><label id="invStockLabel">库存总数（瓶）</label><input type="number" id="invStock" value="0" min="0"><small id="invStockHint" style="color:var(--text-dim);">酒水库存统一按瓶填写</small></div>
       <div class="form-group"><label>低库存提醒值</label><input type="number" id="invLowStock" value="5" min="0"></div>
     </div>
-    <div class="form-group admin-only" style="display:none;"><label>成本（元/基础单位）</label><input type="number" id="invCostPrice" value="0" min="0" step="0.01"><small style="color:var(--text-dim);">Ctrl+/ 显示或隐藏</small></div>
+    <div id="inventoryCaseFields" style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+      <div class="form-group"><label>每箱数量（瓶）</label><input type="number" id="invCaseSize" value="0" min="0"><small style="color:var(--text-dim);">不按箱销售填 0</small></div>
+      <div class="form-group"><label>整箱售价（元）</label><input type="number" id="invCasePrice" value="0" min="0" step="0.01"></div>
+    </div>
+    <div class="form-group admin-only" style="display:none;"><label>单位成本（元）</label><input type="number" id="invCostPrice" value="0" min="0" step="0.01"><small style="color:var(--text-dim);">Ctrl+/ 显示或隐藏</small></div>
     <div class="modal-actions">
       <button class="btn btn-secondary" onclick="closeModal('inventoryModal')">取消</button>
       <button class="btn btn-primary" id="confirmInventory">保存</button>
     </div>
   </div>
 </div>
-
 <!-- Staff Modal -->
 <div class="modal-overlay" id="staffModal">
   <div class="modal">
@@ -599,7 +601,7 @@
     </div>
   </div>
 </div>
-<script src="/static/app.js?v=16"></script>
+<script src="/static/app.js?v=17"></script>
 
 
 

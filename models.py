@@ -127,7 +127,7 @@ class DeletePackageRequest(RequestModel):
     admin_password: str
 
 class CreateInventoryRequest(RequestModel):
-    category: Literal["酒水", "零食", "水果"] = "酒水"
+    category: Literal["酒水", "饮料", "零食", "水果"] = "酒水"
     name: str = Field(min_length=1, max_length=64)
     unit_name: str = Field(default="瓶", min_length=1, max_length=8)
     unit_price: float = Field(default=0, ge=0)
@@ -139,7 +139,7 @@ class CreateInventoryRequest(RequestModel):
 
 
 class UpdateInventoryRequest(RequestModel):
-    category: Literal["酒水", "零食", "水果"] | None = None
+    category: Literal["酒水", "饮料", "零食", "水果"] | None = None
     name: str | None = Field(default=None, min_length=1, max_length=64)
     unit_name: str | None = Field(default=None, min_length=1, max_length=8)
     unit_price: float | None = Field(default=None, ge=0)

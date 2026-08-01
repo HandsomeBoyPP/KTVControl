@@ -930,8 +930,8 @@ function renderPackages(){
   tb.innerHTML=filtered.map(p=>'<tr><td>'+p.name+'</td><td>'+p.duration_minutes+'</td><td>'+Number(p.price_normal||0).toFixed(2)+'</td><td style="font-size:12px;color:var(--text-dim);">'+packageItemSummary(p.items)+'</td><td><button class="btn btn-xs btn-outline" onclick="showEditPackageModal('+p.id+')">编辑</button> <button class="btn btn-xs btn-danger" onclick="showDeletePkgModal('+p.id+',\''+p.name+'\')">删除</button></td></tr>').join("");
 }
 function populatePackageDrinkOptions(){
-  const drinks=inventoryData.filter(i=>i.category==="酒水");
-  document.getElementById("pkgDrinkInventory").innerHTML=drinks.length?drinks.map(i=>'<option value="'+i.id+'">'+i.name+'（库存 '+inventoryStockText(i)+'）</option>').join(""):'<option value="">请先在库存管理新增酒水</option>';
+  const drinks=inventoryData.filter(i=>["酒水","饮料"].includes(i.category));
+  document.getElementById("pkgDrinkInventory").innerHTML=drinks.length?drinks.map(i=>'<option value="'+i.id+'">'+escapeHtml(i.category+' - '+i.name)+'（库存 '+inventoryStockText(i)+'）</option>').join(""):'<option value="">请先在库存管理新增酒水或饮料</option>';
 }
 function renderPackageItemEditor(){
   const indexed=editingPackageItems.map((item,index)=>({item,index})),drinks=indexed.filter(x=>x.item.item_type==="drink"),snacks=indexed.filter(x=>x.item.item_type==="snack");
@@ -991,11 +991,31 @@ async function fetchInventory(){
   }catch(e){}
 }
 
+const INVENTORY_UNITS={"酒水":"瓶","饮料":"瓶","零食":"份","水果":"份"};
+function inventoryUnitFor(category){return INVENTORY_UNITS[category]||"份";}
+function inventoryTracksStock(item){return item&&["酒水","饮料"].includes(item.category);}
+
+function onInventoryCategoryChange(){
+  const category=document.getElementById("invCategory").value;
+  const unit=inventoryUnitFor(category);
+  document.getElementById("invUnitName").value=unit;
+  document.getElementById("invUnitHint").textContent=unit+"（按分类自动设置）";
+  document.getElementById("invStockLabel").textContent="库存总数（"+unit+"）";
+  const tracks=category==="酒水"||category==="饮料";
+  document.getElementById("invStockHint").textContent=tracks?(category+"销售后自动扣库存"):(category+"只记账，不自动扣库存，数量手动维护");
+  const caseFields=document.getElementById("inventoryCaseFields");
+  caseFields.style.display=category==="酒水"?"grid":"none";
+  if(category!=="酒水"){
+    document.getElementById("invCaseSize").value="0";
+    document.getElementById("invCasePrice").value="0";
+  }
+}
+
 function inventoryStockText(item){
   const stock=Number(item.stock||0);
-  const unit=item.unit_name||"瓶";
+  const unit=item.unit_name||inventoryUnitFor(item.category);
   const caseSize=Number(item.case_size||0);
-  if(caseSize>=2){
+  if(item.category==="酒水"&&caseSize>=2){
     const cases=Math.floor(stock/caseSize),remainder=stock%caseSize;
     return cases+"箱 "+remainder+unit+"（总"+stock+unit+"）";
   }
@@ -1006,12 +1026,14 @@ function renderInventory(){
   const tb=document.querySelector("#inventoryTable tbody");
   if(!inventoryData.length){tb.innerHTML='<tr><td colspan="9" class="empty-hint">暂无库存</td></tr>';return;}
   tb.innerHTML=inventoryData.map(i=>{
-    const unit=i.unit_name||"瓶";
+    const unit=i.unit_name||inventoryUnitFor(i.category);
     const caseSize=Number(i.case_size||0);
-    const caseSpec=caseSize>=2?caseSize+unit+"/箱":"-";
-    const casePrice=caseSize>=2?Number(i.case_price||0).toFixed(2):"-";
-    const low=Number(i.stock||0)<=Number(i.low_stock??5);
-    return '<tr><td>'+i.category+'</td><td>'+i.name+'</td><td>'+unit+'</td><td>'+Number(i.unit_price||0).toFixed(2)+'</td><td>'+caseSpec+'</td><td>'+casePrice+'</td><td class="admin-only" style="display:none;">'+Number(i.cost_price||0).toFixed(2)+'</td><td style="'+(low?'color:var(--danger);font-weight:700;':'')+'">'+inventoryStockText(i)+'</td><td><button class="btn btn-xs btn-outline" onclick="showEditInventoryModal('+i.id+')">编辑</button> <button class="btn btn-xs btn-danger del-btn" style="display:none;" onclick="deleteInventory('+i.id+')">删除</button></td></tr>';
+    const hasCase=i.category==="酒水"&&caseSize>=2;
+    const caseSpec=hasCase?caseSize+unit+"/箱":"-";
+    const casePrice=hasCase?Number(i.case_price||0).toFixed(2):"-";
+    const low=inventoryTracksStock(i)&&Number(i.stock||0)<=Number(i.low_stock??5);
+    const linkage=inventoryTracksStock(i)?"":"<div class=\"cell-note\">手动维护</div>";
+    return '<tr><td>'+escapeHtml(i.category)+'</td><td>'+escapeHtml(i.name)+'</td><td>'+unit+'</td><td>'+Number(i.unit_price||0).toFixed(2)+'</td><td>'+caseSpec+'</td><td>'+casePrice+'</td><td class="admin-only" style="display:none;">'+Number(i.cost_price||0).toFixed(2)+'</td><td style="'+(low?'color:var(--danger);font-weight:700;':'')+'">'+inventoryStockText(i)+linkage+'</td><td><button class="btn btn-xs btn-outline" onclick="showEditInventoryModal('+i.id+')">编辑</button> <button class="btn btn-xs btn-danger del-btn" style="display:none;" onclick="deleteInventory('+i.id+')">删除</button></td></tr>';
   }).join("");
   applyAdminToolsVisibility();
 }
@@ -1019,15 +1041,15 @@ function renderInventory(){
 function showInventoryModal(){
   document.getElementById("inventoryModalTitle").textContent="新增库存物品";
   document.getElementById("editInvId").value="";
-  document.getElementById("invCategory").selectedIndex=0;
+  document.getElementById("invCategory").value="酒水";
   document.getElementById("invName").value="";
-  document.getElementById("invUnitName").value="瓶";
   document.getElementById("invPrice").value="0";
   document.getElementById("invCaseSize").value="0";
   document.getElementById("invCasePrice").value="0";
   document.getElementById("invCostPrice").value="0";
   document.getElementById("invStock").value="0";
   document.getElementById("invLowStock").value="5";
+  onInventoryCategoryChange();
   showModal("inventoryModal");
   applyAdminToolsVisibility();
 }
@@ -1038,26 +1060,30 @@ function showEditInventoryModal(itemId){
   document.getElementById("editInvId").value=itemId;
   document.getElementById("invCategory").value=i.category;
   document.getElementById("invName").value=i.name;
-  document.getElementById("invUnitName").value=i.unit_name||"瓶";
   document.getElementById("invPrice").value=Number(i.unit_price||0);
-  document.getElementById("invCaseSize").value=Number(i.case_size||0);
-  document.getElementById("invCasePrice").value=Number(i.case_price||0);
-  document.getElementById("invCostPrice").value=Number(i.cost_price||0);
   document.getElementById("invStock").value=Number(i.stock||0);
   document.getElementById("invLowStock").value=Number(i.low_stock??5);
+  document.getElementById("invCostPrice").value=Number(i.cost_price||0);
+  onInventoryCategoryChange();
+  if(i.category==="酒水"){
+    document.getElementById("invCaseSize").value=Number(i.case_size||0);
+    document.getElementById("invCasePrice").value=Number(i.case_price||0);
+  }
   showModal("inventoryModal");
   applyAdminToolsVisibility();
 }
 
 async function confirmInventory(){
   const editId=document.getElementById("editInvId").value;
+  const category=document.getElementById("invCategory").value;
+  const isAlcohol=category==="酒水";
   const data={
-    category:document.getElementById("invCategory").value,
+    category,
     name:document.getElementById("invName").value.trim(),
-    unit_name:document.getElementById("invUnitName").value.trim()||"瓶",
+    unit_name:inventoryUnitFor(category),
     unit_price:parseFloat(document.getElementById("invPrice").value)||0,
-    case_size:parseInt(document.getElementById("invCaseSize").value)||0,
-    case_price:parseFloat(document.getElementById("invCasePrice").value)||0,
+    case_size:isAlcohol?(parseInt(document.getElementById("invCaseSize").value)||0):0,
+    case_price:isAlcohol?(parseFloat(document.getElementById("invCasePrice").value)||0):0,
     stock:parseInt(document.getElementById("invStock").value)||0,
     low_stock:parseInt(document.getElementById("invLowStock").value)||0
   };
@@ -1075,11 +1101,10 @@ async function confirmInventory(){
   try{
     const r=await fetch(editId?API.inventory+"/"+editId:API.inventory,{method:editId?"PUT":"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(data)});
     const j=await r.json();
-    if(j.code===0){closeModal("inventoryModal");fetchInventory();}
+    if(r.ok&&j.code===0){closeModal("inventoryModal");fetchInventory();}
     else alert("操作失败: "+(j.detail||"unknown"));
   }catch(e){alert("请求失败: "+e);}
 }
-
 async function deleteInventory(itemId){
   if(!confirm("确认删除该库存物品？"))return;
   try{
@@ -1554,7 +1579,7 @@ async function showDrinksModal(){
     currentBilling=bill;
     inventoryData=inventoryJson.data;
     renderDrinksEditTable(bill.drinks||[]);
-    const available=inventoryData.filter(i=>Number(i.stock||0)>0);
+    const available=inventoryData.filter(i=>!inventoryTracksStock(i)||Number(i.stock||0)>0);
     const itemSelect=document.getElementById("newDrinkItem");
     itemSelect.innerHTML=available.map(i=>'<option value="'+i.id+'">'+i.category+' - '+i.name+'（'+inventoryStockText(i)+'）</option>').join("");
     document.getElementById("newDrinkQty").value="1";
@@ -1567,32 +1592,35 @@ function onNewDrinkItemChange(){
   const itemId=parseInt(document.getElementById("newDrinkItem").value),item=inventoryData.find(i=>i.id===itemId);
   const unitSelect=document.getElementById("newDrinkSaleUnit");
   if(!item){unitSelect.innerHTML="";document.getElementById("newDrinkHint").textContent="暂无可售库存";return;}
-  const unit=item.unit_name||"瓶";
+  const unit=item.unit_name||inventoryUnitFor(item.category);
   let options='<option value="unit">'+unit+'（'+Number(item.unit_price||0).toFixed(2)+'元）</option>';
-  if(Number(item.case_size||0)>=2&&Number(item.case_price||0)>0){
+  if(item.category==="酒水"&&Number(item.case_size||0)>=2&&Number(item.case_price||0)>0){
     options+='<option value="case">箱（'+item.case_size+unit+'，'+Number(item.case_price||0).toFixed(2)+'元）</option>';
   }
   unitSelect.innerHTML=options;
   updateNewDrinkHint();
 }
-
 function updateNewDrinkHint(){
   const itemId=parseInt(document.getElementById("newDrinkItem").value),item=inventoryData.find(i=>i.id===itemId);
   if(!item)return;
   const saleUnit=document.getElementById("newDrinkSaleUnit").value,qty=Math.max(1,parseInt(document.getElementById("newDrinkQty").value)||1);
   const unitSize=saleUnit==="case"?Number(item.case_size||0):1;
   const price=saleUnit==="case"?Number(item.case_price||0):Number(item.unit_price||0);
-  const required=qty*unitSize,unit=item.unit_name||"瓶",enough=Number(item.stock||0)>=required;
+  const required=qty*unitSize,unit=item.unit_name||inventoryUnitFor(item.category),tracks=inventoryTracksStock(item);
+  const enough=!tracks||Number(item.stock||0)>=required;
   const hint=document.getElementById("newDrinkHint");
-  hint.textContent="库存："+inventoryStockText(item)+"；本次扣减 "+required+unit+"；金额 "+(qty*price).toFixed(2)+" 元";
+  hint.textContent=tracks?("库存："+inventoryStockText(item)+"；本次扣减 "+required+unit+"；金额 "+(qty*price).toFixed(2)+" 元"):("本次只记金额，不自动扣库存；金额 "+(qty*price).toFixed(2)+" 元");
   hint.style.color=enough?"var(--text-dim)":"var(--danger)";
 }
-
 function renderDrinksEditTable(drinks){
   const tb=document.querySelector("#drinksEditTable tbody");if(!drinks.length){tb.innerHTML='<tr><td colspan="7" style="color:var(--text-dim);padding:20px;">暂无明细</td></tr>';return;}
-  tb.innerHTML=drinks.map(d=>{const label=drinkUnitLabel(d),subtotal=(Number(d.qty||0)*Number(d.unit_price||0)).toFixed(2),isPackage=d.source==="package",operation=isPackage?'<span style="font-size:12px;color:var(--accent);">套餐包含</span>':'<button class="btn btn-xs btn-danger" onclick="deleteDrink('+d.id+')">删除</button>',stockText=Number(d.stock_qty||0)>0?Number(d.stock_qty):"-";return '<tr><td>'+(isPackage?'[套餐] ':'')+d.item_name+'</td><td>'+label+(Number(d.unit_size||1)>1?'（'+d.unit_size+'基础单位）':'')+'</td><td>'+Number(d.unit_price||0).toFixed(2)+'</td><td>'+d.qty+'</td><td>'+subtotal+'</td><td>'+stockText+'</td><td>'+operation+'</td></tr>';}).join("");
-}
-async function addDrinkFromModal(){
+  tb.innerHTML=drinks.map(d=>{
+    const label=drinkUnitLabel(d),subtotal=(Number(d.qty||0)*Number(d.unit_price||0)).toFixed(2),isPackage=d.source==="package";
+    const operation=isPackage?'<span style="font-size:12px;color:var(--accent);">套餐包含</span>':'<button class="btn btn-xs btn-danger" onclick="deleteDrink('+d.id+')">删除</button>';
+    const stockText=Number(d.stock_qty||0)>0?Number(d.stock_qty):"不联动";
+    return '<tr><td>'+(isPackage?'[套餐] ':'')+escapeHtml(d.item_name)+'</td><td>'+label+(Number(d.unit_size||1)>1?'（'+d.unit_size+'基础单位）':'')+'</td><td>'+Number(d.unit_price||0).toFixed(2)+'</td><td>'+d.qty+'</td><td>'+subtotal+'</td><td>'+stockText+'</td><td>'+operation+'</td></tr>';
+  }).join("");
+}async function addDrinkFromModal(){
   if(!currentBilling)return;
   const inventoryId=parseInt(document.getElementById("newDrinkItem").value),qty=parseInt(document.getElementById("newDrinkQty").value)||1;
   if(!inventoryId){alert("暂无可售库存物品");return;}
@@ -1604,11 +1632,10 @@ async function addDrinkFromModal(){
 }
 
 async function deleteDrink(drinkId){
-  if(!confirm("确认删除该明细并退回库存？"))return;
+  if(!confirm("确认删除该明细？已扣库存的商品会自动退回库存。"))return;
   const r=await fetch(API.drinkDelete+"/"+drinkId,{method:"DELETE"}),j=await r.json();
   if(r.ok&&j.code===0)showDrinksModal();else alert("删除失败: "+(j.detail||"unknown"));
 }
-
 function closeDrinksModal(){
   closeModal("drinksModal");
   if(currentBilling){
