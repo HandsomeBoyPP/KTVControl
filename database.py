@@ -47,6 +47,7 @@ def init_db():
             password TEXT DEFAULT '0000',
             balance REAL DEFAULT 0,
             level TEXT DEFAULT '会员',
+            remark TEXT,
             created_at TEXT DEFAULT (datetime('now', 'localtime'))
         );
         CREATE TABLE IF NOT EXISTS recharge_logs (
@@ -227,6 +228,7 @@ def init_db():
 
     _migrate_members_password(conn)
     _migrate_unified_membership(conn)
+    _migrate_member_remark(conn)
     _migrate_billing_columns(conn)
     _migrate_device_command_columns(conn)
     _migrate_management_columns(conn)
@@ -251,6 +253,10 @@ def _migrate_unified_membership(conn: sqlite3.Connection):
     """Keep the legacy level column compatible while treating everyone as a member."""
     conn.execute("UPDATE members SET level = '会员' WHERE level IS NULL OR level <> '会员'")
 
+def _migrate_member_remark(conn: sqlite3.Connection):
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(members)").fetchall()}
+    if "remark" not in columns:
+        conn.execute("ALTER TABLE members ADD COLUMN remark TEXT")
 def _migrate_billing_columns(conn: sqlite3.Connection):
     cursor = conn.execute("PRAGMA table_info(billing_records)")
     columns = {row[1] for row in cursor.fetchall()}

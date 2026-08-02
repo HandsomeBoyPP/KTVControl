@@ -52,6 +52,7 @@ class BookingRequest(TimedRequestModel):
 class CreateMemberRequest(RequestModel):
     name: str = Field(min_length=1, max_length=64)
     phone: str = Field(min_length=3, max_length=32)
+    remark: str | None = Field(default=None, max_length=255)
 
 
 
@@ -59,6 +60,7 @@ class UpdateMemberRequest(RequestModel):
     name: str | None = Field(default=None, min_length=1, max_length=64)
     phone: str | None = Field(default=None, min_length=3, max_length=32)
     balance: float | None = Field(default=None, ge=0)
+    remark: str | None = Field(default=None, max_length=255)
 
 
 
@@ -182,6 +184,7 @@ class SaveBillingDraftRequest(RequestModel):
     package_id: int = Field(gt=0)
     payment_method: Literal["\u73b0\u91d1", "\u5fae\u4fe1", "\u652f\u4ed8\u5b9d", "\u4f1a\u5458\u4f59\u989d"] = "\u73b0\u91d1"
     discount: float = Field(default=0, ge=0)
+    notes: str | None = Field(default=None, max_length=200)
 
 class SettlementRequest(RequestModel):
     billing_id: int = Field(gt=0)
@@ -190,6 +193,7 @@ class SettlementRequest(RequestModel):
     discount: float = Field(default=0, ge=0)
     member_phone: str | None = Field(default=None, max_length=32)
     member_password: str | None = Field(default=None, max_length=64)
+    notes: str | None = Field(default=None, max_length=200)
 
 
 class VerifyMemberRequest(RequestModel):

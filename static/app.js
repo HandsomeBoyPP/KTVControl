@@ -722,13 +722,12 @@ async function fetchMembers(){try{const r=await fetch(API.members);const j=await
 
 function renderMembers(){
   const tb=document.querySelector("#membersTable tbody");
-  if(!membersData.length){tb.innerHTML='<tr><td colspan="5" class="empty-hint">暂无会员数据</td></tr>';return;}
+  if(!membersData.length){tb.innerHTML='<tr><td colspan="6" class="empty-hint">暂无会员数据</td></tr>';return;}
   tb.innerHTML=membersData.map(m=>{
     const cr=m.created_at?m.created_at.replace("T"," ").substring(0,19):"-";
-    return '<tr><td>'+escapeHtml(m.name)+'</td><td>'+escapeHtml(m.phone)+'</td><td>'+Number(m.balance||0).toFixed(2)+'</td><td style="font-size:12px;color:var(--text-dim);">'+cr+'</td><td><button class="btn btn-xs btn-accent" onclick="showRechargeModal('+m.id+')">充值</button> <button class="btn btn-xs btn-outline" onclick="showStoredDrinksModal('+m.id+')">存酒</button> <button class="btn btn-xs btn-outline" onclick="showEditMemberModal('+m.id+')">编辑</button> <button class="btn btn-xs btn-secondary" onclick="showResetPwdModal('+m.id+')">重置密码</button></td></tr>';
+    return '<tr><td>'+escapeHtml(m.name)+'</td><td>'+escapeHtml(m.phone)+'</td><td>'+escapeHtml(m.remark||"-")+'</td><td>'+Number(m.balance||0).toFixed(2)+'</td><td style="font-size:12px;color:var(--text-dim);">'+cr+'</td><td><button class="btn btn-xs btn-accent" onclick="showRechargeModal('+m.id+')">充值</button> <button class="btn btn-xs btn-outline" onclick="showStoredDrinksModal('+m.id+')">存酒</button> <button class="btn btn-xs btn-outline" onclick="showEditMemberModal('+m.id+')">编辑</button> <button class="btn btn-xs btn-secondary" onclick="showResetPwdModal('+m.id+')">重置密码</button></td></tr>';
   }).join("");
 }
-
 function escapeHtml(value){return String(value??"").replace(/[&<>"']/g,ch=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[ch]));}
 
 async function showStoredDrinksModal(memberId){
@@ -834,20 +833,28 @@ async function retrieveStoredDrink(storageId){
   }catch(e){alert("取酒失败: "+e);}
 }
 
-function showMemberModal(){document.getElementById("memberName").value="";document.getElementById("memberPhone").value="";showModal("memberModal");}
+function showMemberModal(){
+  document.getElementById("memberName").value="";
+  document.getElementById("memberPhone").value="";
+  document.getElementById("memberRemark").value="";
+  showModal("memberModal");
+}
 
-
-
-async function confirmMember(){const name=document.getElementById("memberName").value.trim(),phone=document.getElementById("memberPhone").value.trim();if(!name||!phone){alert("请填写姓名和手机号");return;}try{const r=await fetch(API.members,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name,phone})});const j=await r.json();if(j.code===0){closeModal("memberModal");fetchMembers();}else alert("添加失败: "+(j.detail||j.msg||"unknown"));}catch(e){alert("请求失败: "+e);}}
-
-
-
+async function confirmMember(){
+  const name=document.getElementById("memberName").value.trim(),phone=document.getElementById("memberPhone").value.trim(),remark=document.getElementById("memberRemark").value.trim()||null;
+  if(!name||!phone){alert("请填写姓名和手机号");return;}
+  try{
+    const r=await fetch(API.members,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name,phone,remark})}),j=await r.json();
+    if(r.ok&&j.code===0){closeModal("memberModal");fetchMembers();}else alert("添加失败: "+(j.detail||j.msg||"unknown"));
+  }catch(e){alert("请求失败: "+e);}
+}
 function showEditMemberModal(memberId){
   const m=membersData.find(x=>x.id===memberId);if(!m)return;
   currentMember=m;
   document.getElementById("editMemberLabel").textContent=m.name;
   document.getElementById("editMemberName").value=m.name;
   document.getElementById("editMemberPhone").value=m.phone;
+  document.getElementById("editMemberRemark").value=m.remark||"";
   document.getElementById("editMemberBalance").value=Number(m.balance||0).toFixed(2);
   showModal("editMemberModal");
   applyAdminToolsVisibility();
@@ -857,7 +864,7 @@ function showEditMemberModal(memberId){
 
 async function confirmEditMember(){
   if(!currentMember)return;
-  const data={name:document.getElementById("editMemberName").value.trim(),phone:document.getElementById("editMemberPhone").value.trim()};
+  const data={name:document.getElementById("editMemberName").value.trim(),phone:document.getElementById("editMemberPhone").value.trim(),remark:document.getElementById("editMemberRemark").value.trim()||null};
   if(!data.name||!data.phone){alert("请填写姓名和手机号");return;}
   if(adminToolsVisible){
     const balance=parseFloat(document.getElementById("editMemberBalance").value);
@@ -1257,6 +1264,7 @@ function showSettle(billingId){
 
 
     document.getElementById("settlePayment").value=bill.payment_method||(bill.customer_type!=="retail"?"\u4f1a\u5458\u4f59\u989d":"\u73b0\u91d1");
+    document.getElementById("settleNotes").value=bill.notes||"";
 
 
 
@@ -1351,7 +1359,7 @@ function lookupSettleMember(){
 
 
 async function saveSettlementDraft(){
-  if(!currentBilling)return;const packageId=parseInt(document.getElementById("settlePackage").value);if(!packageId){alert("请选择套餐");return;}const data={package_id:packageId,payment_method:document.getElementById("settlePayment").value,discount:parseFloat(document.getElementById("settleDiscount").value)||0};
+  if(!currentBilling)return;const packageId=parseInt(document.getElementById("settlePackage").value);if(!packageId){alert("请选择套餐");return;}const data={package_id:packageId,payment_method:document.getElementById("settlePayment").value,discount:parseFloat(document.getElementById("settleDiscount").value)||0,notes:document.getElementById("settleNotes").value.trim()||null};
   try{const r=await fetch(API.billingDraft+"/"+currentBilling.id+"/draft",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(data)}),j=await r.json();if(!r.ok||j.code!==0){alert("保存失败: "+(j.detail||"unknown"));return;}Object.assign(currentBilling,j);currentBilling.drinks=j.drinks||[];document.getElementById("settleDrinksFee").textContent=Number(j.drinks_fee||0).toFixed(2);renderSettleDrinkSummary(currentBilling.drinks);updateSettleTotal();fetchActiveBilling();fetchInventory();alert("当前账单版本已保存，套餐酒水库存已同步，尚未结账");}catch(e){alert("请求失败: "+e);}
 }
 async function confirmSettle(){
@@ -1386,7 +1394,7 @@ async function confirmSettle(){
 
 
 
-  try{const r=await fetch(API.settle,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({billing_id:currentBilling.id,package_id:pkgId,payment_method:payment,discount,member_phone:document.getElementById("settleMemberPhone").value,member_password:mp})});const j=await r.json();if(j.code===0){const msg="结账成功！总计："+j.total.toFixed(2);alert(msg);hideSettle();fetchActiveBilling();fetchRooms();if(activeTab==="members")fetchMembers();fetchBillingHistory();}else alert("结账失败: "+(j.detail||"unknown"));}
+  try{const r=await fetch(API.settle,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({billing_id:currentBilling.id,package_id:pkgId,payment_method:payment,discount,member_phone:document.getElementById("settleMemberPhone").value,member_password:mp,notes:document.getElementById("settleNotes").value.trim()||null})});const j=await r.json();if(j.code===0){const msg="结账成功！总计："+j.total.toFixed(2);alert(msg);hideSettle();fetchActiveBilling();fetchRooms();if(activeTab==="members")fetchMembers();fetchBillingHistory();}else alert("结账失败: "+(j.detail||"unknown"));}
 
 
 
@@ -1462,7 +1470,7 @@ function renderBillingHistory(bills){
 
 
 
-  if(!bills.length){tb.innerHTML='<tr><td colspan="8" class="empty-hint">暂无记录</td></tr>';return;}
+  if(!bills.length){tb.innerHTML='<tr><td colspan="9" class="empty-hint">暂无记录</td></tr>';return;}
 
 
 
@@ -1479,7 +1487,7 @@ function renderBillingHistory(bills){
 
 
 
-    return '<tr><td>'+b.room_no+'</td><td>'+(b.room_fee||0).toFixed(2)+'</td><td>'+(b.drinks_fee||0).toFixed(2)+' <span style="font-size:11px;color:var(--text-dim);">('+drinks+')</span></td><td>'+(b.total||0).toFixed(2)+'</td><td>'+b.payment_method+'</td><td style="font-size:12px;">'+member+'</td><td style="font-size:12px;color:var(--text-dim);">'+t+'</td><td class="del-col" style="display:none;"><button class="btn btn-xs btn-danger del-btn" style="display:none;" onclick="deleteBilling('+b.id+')">删除</button></td></tr>';
+    return '<tr><td>'+b.room_no+'</td><td>'+(b.room_fee||0).toFixed(2)+'</td><td>'+(b.drinks_fee||0).toFixed(2)+' <span style="font-size:11px;color:var(--text-dim);">('+drinks+')</span></td><td>'+(b.total||0).toFixed(2)+'</td><td>'+b.payment_method+'</td><td style="font-size:12px;">'+member+'</td><td>'+escapeHtml(b.notes||"-")+'</td><td style="font-size:12px;color:var(--text-dim);">'+t+'</td><td class="del-col" style="display:none;"><button class="btn btn-xs btn-danger del-btn" style="display:none;" onclick="deleteBilling('+b.id+')">删除</button></td></tr>';
 
 
 

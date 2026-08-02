@@ -372,7 +372,7 @@ async def cancel_booking(booking_id: str):
 async def list_members():
     conn = get_db()
     try:
-        rows = conn.execute("SELECT id, name, phone, balance, created_at FROM members ORDER BY id DESC").fetchall()
+        rows = conn.execute("SELECT id, name, phone, balance, remark, created_at FROM members ORDER BY id DESC").fetchall()
         return {"code": 0, "data": [dict(r) for r in rows]}
     finally:
         conn.close()
@@ -386,8 +386,11 @@ async def create_member(req: CreateMemberRequest):
         if existing:
             raise HTTPException(400, "手机号已注册")
         pwd = req.phone[-4:] if len(req.phone) >= 4 else req.phone
-        conn.execute("INSERT INTO members (name, phone, password, level) VALUES (?, ?, ?, ?)",
-                     (req.name, req.phone, pwd, "会员"))
+        remark = (req.remark or "").strip() or None
+        conn.execute(
+            "INSERT INTO members (name, phone, password, level, remark) VALUES (?, ?, ?, ?, ?)",
+            (req.name, req.phone, pwd, "会员", remark),
+        )
         conn.commit()
         mid = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
         log_operation("create_member", None, f"新增会员 {req.name} phone={req.phone}")
@@ -418,6 +421,9 @@ async def update_member(member_id: int, req: UpdateMemberRequest):
                 continue
             fields.append(f"{field} = ?")
             values.append(round(value, 2) if field == "balance" else value)
+        if "remark" in req.model_fields_set:
+            fields.append("remark = ?")
+            values.append((req.remark or "").strip() or None)
         if fields:
             values.append(member_id)
             conn.execute(f"UPDATE members SET {', '.join(fields)} WHERE id = ?", values)
@@ -1032,13 +1038,14 @@ async def save_billing_draft(billing_id: int, req: SaveBillingDraftRequest):
         if discount > max_discount:
             raise HTTPException(400, f"优惠金额不能超过总额的20%（最多{max_discount}）")
         total = round(subtotal - discount, 2)
+        notes = (req.notes or "").strip() or None
 
         conn.execute(
             """UPDATE billing_records
                SET package_id = ?, room_fee = ?, drinks_fee = ?, total = ?,
-                   discount = ?, payment_method = ?
+                   discount = ?, payment_method = ?, notes = ?
                WHERE id = ? AND status = 'open'""",
-            (req.package_id, room_fee, drinks_fee, total, discount, req.payment_method, billing_id),
+            (req.package_id, room_fee, drinks_fee, total, discount, req.payment_method, notes, billing_id),
         )
         drinks = [dict(row) for row in conn.execute(
             "SELECT * FROM drink_orders WHERE billing_id = ? ORDER BY id", (billing_id,)
@@ -1047,14 +1054,14 @@ async def save_billing_draft(billing_id: int, req: SaveBillingDraftRequest):
         log_operation(
             "save_billing_draft", billing["room_no"],
             f"billing={billing_id} package={req.package_id} drinks_fee={drinks_fee} "
-            f"discount={discount} total={total} payment={req.payment_method}",
+            f"discount={discount} total={total} payment={req.payment_method} notes={notes or ''}",
         )
         return {
             "code": 0, "msg": "ok", "billing_id": billing_id,
             "package_id": req.package_id, "room_fee": room_fee,
             "drinks_fee": drinks_fee, "discount": discount,
             "total": total, "payment_method": req.payment_method,
-            "drinks": drinks,
+            "notes": notes, "drinks": drinks,
         }
     except Exception:
         conn.rollback()
@@ -1222,6 +1229,7 @@ async def settle_billing(req: SettlementRequest):
         if discount > max_discount:
             raise HTTPException(400, f"优惠金额不能超过总额的20% (最多{max_discount})")
         total = round(subtotal - discount, 2)
+        notes = (req.notes or "").strip() or None
 
         payment_method = req.payment_method
         member = None
@@ -1267,13 +1275,13 @@ async def settle_billing(req: SettlementRequest):
             """UPDATE billing_records
                SET package_id = ?, close_at = datetime('now', 'localtime'),
                    room_fee = ?, drinks_fee = ?, total = ?, discount = ?,
-                   cash_supplement = 0, payment_method = ?,
+                   cash_supplement = 0, payment_method = ?, notes = ?,
                    settlement_member_id = ?, settlement_member_name = ?,
                    settlement_member_phone = ?, member_balance_after = ?,
                    status = 'closed'
                WHERE id = ?""",
             (
-                req.package_id, room_fee, drinks_fee, total, discount, payment_method,
+                req.package_id, room_fee, drinks_fee, total, discount, payment_method, notes,
                 settlement_member_id, settlement_member_name, settlement_member_phone,
                 member_balance_after, req.billing_id,
             ),
@@ -1291,12 +1299,12 @@ async def settle_billing(req: SettlementRequest):
         log_operation(
             "settle_billing", room_name,
             f"结账 room_fee={room_fee} drinks_fee={drinks_fee} discount={discount} "
-            f"total={total} payment={payment_method} room_kept_open=true{member_detail}",
+            f"total={total} payment={payment_method} notes={notes or ''} room_kept_open=true{member_detail}",
         )
         return {
             "code": 0, "msg": "ok", "total": total, "room_fee": room_fee,
             "discount": discount, "cash_supplement": 0, "payment_method": payment_method,
-            "room_kept_open": True,
+            "notes": notes, "room_kept_open": True,
             "settlement_member_name": settlement_member_name,
             "settlement_member_phone": settlement_member_phone,
             "member_balance_after": member_balance_after,
