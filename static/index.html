@@ -30,6 +30,7 @@
     <button class="tab-btn" data-tab="checkout"><span class="tab-icon">&#165;</span> 收银台</button>
     <button class="tab-btn" data-tab="reports"><span class="tab-icon">&#9638;</span> 营业报表</button>
     <button class="tab-btn" data-tab="history"><span class="tab-icon">&#9776;</span> 结账记录</button>
+    <button class="tab-btn" data-tab="recharges"><span class="tab-icon">&#165;</span> 充卡记录</button>
 
     <div class="sidebar-section-title">管理</div>
     <button class="tab-btn" data-tab="packages"><span class="tab-icon">&#9636;</span> 套餐管理</button>
@@ -88,7 +89,7 @@
       <div class="settle-grid">
         <div><label>套餐费</label><span id="settleRoomFee">0</span></div>
         <div><label>酒水小吃</label><span id="settleDrinksFee">0</span></div>
-        <div><label>总计</label><span id="settleTotal" style="font-size:24px;color:var(--accent);">0</span></div>
+        <div><label>应收合计</label><span id="settleTotal" style="font-size:24px;color:var(--accent);">0</span></div>
       </div>
       <div style="margin:12px 0;padding:10px;background:rgba(0,0,0,0.15);border-radius:8px;">
         <div style="display:flex;justify-content:space-between;align-items:center;">
@@ -97,11 +98,15 @@
         </div>
         <div id="settleDrinksSummary" style="font-size:13px;color:var(--text-dim);margin-top:8px;">暂无</div>
       </div>
-      <div class="form-group"><label>优惠金额 (最多<span id="maxDiscount">0</span>)</label><input type="number" id="settleDiscount" value="0" min="0" step="0.01" style="width:120px;" oninput="updateSettleTotal()"></div>
+      <div class="form-group">
+        <label>实际收银价格</label>
+        <input type="number" id="settleActualTotal" min="0" step="0.01" style="width:160px;" oninput="onSettleActualPriceInput()">
+        <small id="settlePriceHint" style="display:block;color:var(--text-dim);margin-top:4px;">默认等于应收合计</small>
+      </div>
       <div class="form-group"><label>支付方式</label>
         <select id="settlePayment" onchange="onSettlePaymentChange()"><option value="现金">现金</option><option value="微信">微信</option><option value="支付宝">支付宝</option><option value="会员余额">会员余额</option></select>
       </div>
-      <div class="form-group"><label>备注</label><input type="text" id="settleNotes" maxlength="200" placeholder="可填写本次结账说明"></div>
+      <div class="form-group"><label>备注</label><input type="text" id="settleNotes" maxlength="200" placeholder="修改实际价格时必填，至少10个字" oninput="updateSettlePriceHint()"></div>
       <div id="memberSettleInfo" style="display:none;">
         <div class="form-group"><label>会员手机号</label><div style="display:flex;gap:8px;"><input type="text" id="settleMemberPhone" style="flex:1;"><button class="btn btn-xs btn-outline" onclick="lookupSettleMember()" style="white-space:nowrap;">查询</button></div></div>
         <div class="form-group"><label>会员密码</label><input type="password" id="settleMemberPassword"></div>
@@ -128,11 +133,33 @@
   </section>
 
   <section class="tab-panel" id="tab-history">
-    <div class="section-header"><h2>结账记录</h2><button class="btn btn-sm btn-secondary" onclick="fetchBillingHistory()">刷新</button></div>
+    <div class="section-header">
+      <h2>结账记录</h2>
+      <div style="display:flex;gap:8px;">
+        <button class="btn btn-sm btn-accent admin-only" style="display:none;" onclick="showBillingHistoryModal()">+ 新增结账记录</button>
+        <button class="btn btn-sm btn-secondary" onclick="fetchBillingHistory()">刷新</button>
+      </div>
+    </div>
     <div class="table-wrap">
       <table class="data-table" id="historyTable">
-        <thead><tr><th>房间</th><th>套餐费</th><th>酒水费</th><th>总计</th><th>支付方式</th><th>结账会员</th><th>备注</th><th>结账时间</th><th class="del-col" style="display:none;">操作</th></tr></thead>
+        <thead><tr><th>房间</th><th>套餐费</th><th>酒水费</th><th>支付金额</th><th>支付方式</th><th>结账会员</th><th>备注</th><th>结账时间</th><th class="del-col" style="display:none;">操作</th></tr></thead>
         <tbody><tr><td colspan="9" class="empty-hint">暂无记录</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="tab-panel" id="tab-recharges">
+    <div class="section-header">
+      <h2>充卡记录</h2>
+      <div style="display:flex;gap:8px;">
+        <button class="btn btn-sm btn-accent admin-only" style="display:none;" onclick="showRechargeLogModal()">+ 新增充卡记录</button>
+        <button class="btn btn-sm btn-secondary" onclick="fetchRechargeLogs()">刷新</button>
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table class="data-table" id="rechargeLogsTable">
+        <thead><tr><th>会员</th><th>明细</th><th>金额</th><th>余额</th><th>支付方式</th><th>备注</th><th>时间</th><th class="del-col" style="display:none;">操作</th></tr></thead>
+        <tbody><tr><td colspan="8" class="empty-hint">暂无记录</td></tr></tbody>
       </table>
     </div>
   </section>
@@ -436,6 +463,7 @@
     <div class="form-group"><label>金额</label><input type="number" id="rechargeAmount" min="0.01" step="0.01"></div>
 
     <div class="form-group"><label>支付方式</label><select id="rechargeMethod"><option value="现金">现金</option><option value="微信">微信</option><option value="支付宝">支付宝</option></select></div>
+    <div class="form-group"><label>备注</label><input type="text" id="rechargeNotes" maxlength="200" placeholder="可不填"></div>
 
     <div class="modal-actions">
 
@@ -593,6 +621,49 @@
     </div>
   </div>
 </div>
+<div class="modal-overlay" id="billingHistoryModal">
+  <div class="modal">
+    <h3 id="billingHistoryModalTitle">新增结账记录</h3>
+    <div class="form-group"><label>房间</label><input type="text" id="billingHistoryRoom" maxlength="64"></div>
+    <div class="form-group"><label>套餐费</label><input type="number" id="billingHistoryRoomFee" min="0" step="0.01"></div>
+    <div class="form-group"><label>酒水费</label><input type="number" id="billingHistoryDrinksFee" min="0" step="0.01"></div>
+    <div class="form-group"><label>支付金额</label><input type="number" id="billingHistoryTotal" min="0" step="0.01"></div>
+    <div class="form-group"><label>支付方式</label><input type="text" id="billingHistoryPayment" maxlength="32" list="paymentMethodOptions" value="现金"></div>
+    <div class="form-group"><label>结账会员</label><input type="text" id="billingHistoryMember" maxlength="64"></div>
+    <div class="form-group"><label>会员手机号</label><input type="text" id="billingHistoryMemberPhone" maxlength="32" placeholder="可不填"></div>
+    <div class="form-group"><label>备注</label><input type="text" id="billingHistoryNotes" maxlength="200"></div>
+    <div class="form-group"><label>结账时间</label><input type="datetime-local" id="billingHistoryTime" step="1"></div>
+    <p style="font-size:12px;color:var(--warning);">这里只维护结账记录，不联动房间、库存或会员余额。</p>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" onclick="closeModal('billingHistoryModal')">取消</button>
+      <button class="btn btn-primary" id="confirmBillingHistory">保存</button>
+    </div>
+  </div>
+</div>
+
+<datalist id="paymentMethodOptions"><option value="现金"><option value="微信"><option value="支付宝"><option value="会员余额"></datalist>
+
+<div class="modal-overlay" id="rechargeLogModal">
+  <div class="modal">
+    <h3 id="rechargeLogModalTitle">手动添加充卡记录</h3>
+    <input type="hidden" id="editRechargeLogId">
+    <div class="form-group"><label>关联会员</label><select id="rechargeLogMember" onchange="onRechargeLogMemberChange()"></select></div>
+    <div class="form-group"><label>会员姓名</label><input type="text" id="rechargeLogMemberName" maxlength="64"></div>
+    <div class="form-group"><label>会员手机号</label><input type="text" id="rechargeLogMemberPhone" maxlength="32"></div>
+    <div class="form-group"><label>充卡金额</label><input type="number" id="rechargeLogAmount" min="0.01" step="0.01"></div>
+    <div class="form-group"><label>充值后余额</label><input type="number" id="rechargeLogBalance" min="0" step="0.01"></div>
+    <div class="form-group"><label>明细</label><input type="text" id="rechargeLogDetail" maxlength="200" value="会员充卡"></div>
+    <div class="form-group"><label>支付方式</label><input type="text" id="rechargeLogMethod" maxlength="32" list="paymentMethodOptions" value="现金"></div>
+    <div class="form-group"><label>备注</label><input type="text" id="rechargeLogNotes" maxlength="200"></div>
+    <div class="form-group"><label>时间</label><input type="datetime-local" id="rechargeLogTime" step="1"></div>
+    <p style="font-size:12px;color:var(--warning);">这里只维护充卡流水，不会自动修改会员当前余额。</p>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" onclick="closeModal('rechargeLogModal')">取消</button>
+      <button class="btn btn-primary" id="confirmRechargeLog">保存</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal-overlay" id="adminToolsModal">
   <div class="modal">
     <h3>&#39564;&#35777;&#31649;&#29702;&#23494;&#30721;</h3>
@@ -604,7 +675,7 @@
     </div>
   </div>
 </div>
-<script src="/static/app.js?v=20"></script>
+<script src="/static/app.js?v=25"></script>
 
 
 

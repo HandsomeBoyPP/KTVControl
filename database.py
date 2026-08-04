@@ -53,8 +53,13 @@ def init_db():
         CREATE TABLE IF NOT EXISTS recharge_logs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             member_id INTEGER NOT NULL,
+            member_name TEXT,
+            member_phone TEXT,
             amount REAL NOT NULL,
+            balance_after REAL,
             payment_method TEXT DEFAULT '现金',
+            detail TEXT DEFAULT '会员充卡',
+            notes TEXT,
             created_at TEXT DEFAULT (datetime('now', 'localtime')),
             FOREIGN KEY (member_id) REFERENCES members(id)
         );
@@ -229,6 +234,7 @@ def init_db():
     _migrate_members_password(conn)
     _migrate_unified_membership(conn)
     _migrate_member_remark(conn)
+    _migrate_recharge_log_columns(conn)
     _migrate_billing_columns(conn)
     _migrate_device_command_columns(conn)
     _migrate_management_columns(conn)
@@ -257,6 +263,26 @@ def _migrate_member_remark(conn: sqlite3.Connection):
     columns = {row[1] for row in conn.execute("PRAGMA table_info(members)").fetchall()}
     if "remark" not in columns:
         conn.execute("ALTER TABLE members ADD COLUMN remark TEXT")
+
+def _migrate_recharge_log_columns(conn: sqlite3.Connection):
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(recharge_logs)").fetchall()}
+    required_columns = [
+        ("member_name", "TEXT"),
+        ("member_phone", "TEXT"),
+        ("balance_after", "REAL"),
+        ("detail", "TEXT DEFAULT '会员充卡'"),
+        ("notes", "TEXT"),
+    ]
+    for name, column_type in required_columns:
+        if name not in columns:
+            conn.execute(f"ALTER TABLE recharge_logs ADD COLUMN {name} {column_type}")
+    conn.execute(
+        """UPDATE recharge_logs
+           SET member_name = COALESCE(member_name, (SELECT name FROM members WHERE members.id = recharge_logs.member_id)),
+               member_phone = COALESCE(member_phone, (SELECT phone FROM members WHERE members.id = recharge_logs.member_id)),
+               detail = COALESCE(NULLIF(detail, ''), '会员充卡')"""
+    )
+
 def _migrate_billing_columns(conn: sqlite3.Connection):
     cursor = conn.execute("PRAGMA table_info(billing_records)")
     columns = {row[1] for row in cursor.fetchall()}

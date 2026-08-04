@@ -1,5 +1,6 @@
 """Validated Pydantic request models for KTV Control."""
 
+from datetime import datetime
 from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -71,6 +72,21 @@ class ResetMemberPasswordRequest(RequestModel):
 class RechargeRequest(RequestModel):
     amount: float = Field(gt=0)
     payment_method: Literal["现金", "微信", "支付宝"] = "现金"
+    notes: str | None = Field(default=None, max_length=200)
+
+
+class RechargeLogWriteRequest(RequestModel):
+    member_id: int = Field(gt=0)
+    member_name: str = Field(min_length=1, max_length=64)
+    member_phone: str = Field(min_length=3, max_length=32)
+    amount: float = Field(gt=0)
+    balance_after: float = Field(ge=0)
+    payment_method: str = Field(min_length=1, max_length=32)
+    detail: str = Field(min_length=1, max_length=200)
+    notes: str | None = Field(default=None, max_length=200)
+    created_at: datetime
+    admin_password: str
+
 
 class StoreMemberDrinkRequest(RequestModel):
     item_name: str = Field(min_length=1, max_length=64)
@@ -183,17 +199,30 @@ class UpdateBillingRequest(RequestModel):
 class SaveBillingDraftRequest(RequestModel):
     package_id: int = Field(gt=0)
     payment_method: Literal["\u73b0\u91d1", "\u5fae\u4fe1", "\u652f\u4ed8\u5b9d", "\u4f1a\u5458\u4f59\u989d"] = "\u73b0\u91d1"
-    discount: float = Field(default=0, ge=0)
+    actual_total: float | None = Field(default=None, ge=0)
     notes: str | None = Field(default=None, max_length=200)
 
 class SettlementRequest(RequestModel):
     billing_id: int = Field(gt=0)
     package_id: int = Field(gt=0)
     payment_method: Literal["现金", "微信", "支付宝", "会员余额"] = "现金"
-    discount: float = Field(default=0, ge=0)
+    actual_total: float | None = Field(default=None, ge=0)
     member_phone: str | None = Field(default=None, max_length=32)
     member_password: str | None = Field(default=None, max_length=64)
     notes: str | None = Field(default=None, max_length=200)
+
+
+class BillingHistoryWriteRequest(RequestModel):
+    room_no: str = Field(min_length=1, max_length=64)
+    room_fee: float = Field(ge=0)
+    drinks_fee: float = Field(ge=0)
+    total: float = Field(ge=0)
+    payment_method: str = Field(min_length=1, max_length=32)
+    settlement_member_name: str | None = Field(default=None, max_length=64)
+    settlement_member_phone: str | None = Field(default=None, max_length=32)
+    notes: str | None = Field(default=None, max_length=200)
+    close_at: datetime
+    admin_password: str
 
 
 class VerifyMemberRequest(RequestModel):

@@ -22,7 +22,7 @@ const API = {
 
 
 
-  open: "/api/rooms/open", close: "/api/rooms/close", extend: "/api/rooms/extend",
+  open: "/api/rooms/open", close: "/api/rooms/close", deviceClose: "/api/rooms/device-close", extend: "/api/rooms/extend",
 
 
 
@@ -34,7 +34,7 @@ const API = {
 
 
 
-  recharge: "/api/members", resetPwd: "/api/members",
+  recharge: "/api/members", resetPwd: "/api/members", rechargeLogs: "/api/recharge-logs",
 
 
 
@@ -66,7 +66,7 @@ const API = {
 
 
 
-let roomsData=[], membersData=[], packagesData=[], inventoryData=[], staffData=[], activeBillingData=[];
+let roomsData=[], membersData=[], packagesData=[], inventoryData=[], staffData=[], activeBillingData=[], billingHistoryData=[], rechargeLogsData=[];
 let editingPackageItems=[];
 let currentStoredDrinkMember=null, memberStoredDrinksData=[];
 
@@ -82,7 +82,8 @@ let activeTab="rooms";
 
 let pollingTimers=[], countdownTimers={};
 
-let adminToolsVisible=false;
+let adminToolsVisible=false, adminSessionPassword="";
+let editingRechargeLogId=null, editingBillingHistoryId=null;
 
 function applyAdminToolsVisibility(){
   document.querySelectorAll(".del-col,.del-btn,.admin-only").forEach(el=>{el.style.display=adminToolsVisible?"":"none";});
@@ -98,6 +99,7 @@ async function confirmAdminToolsAccess(){
     const j=await r.json();
     if(!r.ok||j.code!==0){alert(j.detail||"\u7ba1\u7406\u5bc6\u7801\u9519\u8bef");input.select();return;}
     adminToolsVisible=true;
+    adminSessionPassword=password;
     applyAdminToolsVisibility();
     closeModal("adminToolsModal");
     input.value="";
@@ -147,6 +149,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
 
   document.getElementById("confirmRecharge")?.addEventListener("click", confirmRecharge);
+  document.getElementById("confirmRechargeLog")?.addEventListener("click", confirmRechargeLog);
+  document.getElementById("confirmBillingHistory")?.addEventListener("click", confirmBillingHistory);
 
 
 
@@ -232,7 +236,7 @@ document.addEventListener("DOMContentLoaded", () => {
 document.addEventListener("keydown",function(e){
   if(!e.ctrlKey||e.shiftKey||(e.key!=="/"&&e.code!=="Slash")||e.repeat)return;
   e.preventDefault();
-  if(adminToolsVisible){adminToolsVisible=false;applyAdminToolsVisibility();return;}
+  if(adminToolsVisible){adminToolsVisible=false;adminSessionPassword="";applyAdminToolsVisibility();return;}
   const input=document.getElementById("adminToolsPassword");
   input.value="";
   showModal("adminToolsModal");
@@ -296,6 +300,8 @@ function switchTab(tab){
     fetchStaff();
   }else if(tab==="history"){
     fetchBillingHistory();
+  }else if(tab==="recharges"){
+    fetchRechargeLogs();
   }else if(tab==="logs"){
     fetchOpLogs();
   }
@@ -411,7 +417,7 @@ function renderRooms(){
 
 
 
-    let act="";if(!r.powered_on)act='<span style="color:var(--text-dim);font-size:13px;">房间未通电</span>';
+    let act="";if(!r.powered_on)act=r.room_state===1?'<button class="btn btn-danger" onclick="deviceCloseRoom(\''+r.room_no+'\')">关台</button>':'<span style="color:var(--text-dim);font-size:13px;">房间未通电</span>';
 
 
 
@@ -604,6 +610,18 @@ async function closeRoom(roomNo){
 
 
 
+}
+
+
+
+async function deviceCloseRoom(roomNo){
+  const room=roomsData.find(r=>r.room_no===roomNo);if(!room)return;
+  if(!confirm("确认调用设备接口关台 "+roomNo+"？"))return;
+  try{
+    const r=await fetch(API.deviceClose,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({room_ip:room.room_ip,room_name:room.room_no})}),j=await r.json();
+    if(r.ok&&j.code===0){alert("设备关台指令调用成功");fetchRooms();fetchPowerStatus();}
+    else alert("设备关台失败: "+(j.detail||j.msg||"unknown"));
+  }catch(e){alert("请求失败: "+e);}
 }
 
 
@@ -879,11 +897,11 @@ async function confirmEditMember(){
 
 
 
-function showRechargeModal(memberId){const member=membersData.find(item=>item.id===memberId);if(!member)return;currentMember=member;document.getElementById("rechargeMemberLabel").textContent=member.name;document.getElementById("rechargeAmount").value="";document.getElementById("rechargeMethod").value="现金";showModal("rechargeModal");}
+function showRechargeModal(memberId){const member=membersData.find(item=>item.id===memberId);if(!member)return;currentMember=member;document.getElementById("rechargeMemberLabel").textContent=member.name;document.getElementById("rechargeAmount").value="";document.getElementById("rechargeMethod").value="现金";document.getElementById("rechargeNotes").value="";showModal("rechargeModal");}
 
 
 
-async function confirmRecharge(){if(!currentMember)return;const amount=parseFloat(document.getElementById("rechargeAmount").value),method=document.getElementById("rechargeMethod").value;if(!amount||amount<=0){alert("请输入有效金额");return;}try{const r=await fetch(API.recharge+"/"+currentMember.id+"/recharge",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({amount,payment_method:method})});const j=await r.json();if(j.code===0){closeModal("rechargeModal");fetchMembers();}else alert("充值失败："+(j.detail||j.msg||"unknown"));}catch(e){alert("请求失败: "+e);}}
+async function confirmRecharge(){if(!currentMember)return;const amount=parseFloat(document.getElementById("rechargeAmount").value),method=document.getElementById("rechargeMethod").value,notes=document.getElementById("rechargeNotes").value.trim()||null;if(!amount||amount<=0){alert("请输入有效金额");return;}try{const r=await fetch(API.recharge+"/"+currentMember.id+"/recharge",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({amount,payment_method:method,notes})});const j=await r.json();if(j.code===0){closeModal("rechargeModal");fetchMembers();if(activeTab==="recharges")fetchRechargeLogs();}else alert("充值失败："+(j.detail||j.msg||"unknown"));}catch(e){alert("请求失败: "+e);}}
 
 
 
@@ -1225,7 +1243,9 @@ function showSettle(billingId){
 
 
 
-    if(json.code!==0)return;const bill=json.data.find(b=>b.id===billingId);if(!bill)return;
+    if(json.code!==0){alert("\u6253\u5f00\u7ed3\u8d26\u5931\u8d25: "+(json.detail||"unknown"));return;}
+    const bill=(json.data||[]).find(b=>Number(b.id)===Number(billingId));
+    if(!bill){alert("\u8d26\u5355\u4e0d\u5b58\u5728\u6216\u5df2\u7ed3\u8d26");fetchActiveBilling();return;}
 
 
 
@@ -1278,7 +1298,12 @@ function showSettle(billingId){
 
 
 
-    document.getElementById("settleDiscount").value=Number(bill.discount||0).toFixed(2);
+    const actualInput=document.getElementById("settleActualTotal");
+    const savedTotal=Number(bill.total||0);
+    const selectedPackage=packagesData.find(p=>p.id===parseInt(pkgSel.value));
+    const currentExpected=Number(_getPkgPrice(selectedPackage)||0)+Number(bill.drinks_fee||0);
+    actualInput.value=savedTotal>0?savedTotal.toFixed(2):"";
+    actualInput.dataset.manual=savedTotal>0&&Math.abs(savedTotal-currentExpected)>=0.01?"1":"0";
 
 
 
@@ -1290,7 +1315,7 @@ function showSettle(billingId){
 
 
 
-  });
+  }).catch(e=>alert("\u6253\u5f00\u7ed3\u8d26\u5931\u8d25: "+e.message));
 
 
 
@@ -1309,15 +1334,69 @@ function hideSettle(){document.getElementById("settleCard").style.display="none"
 
 
 function _getPkgPrice(pkg){
-  return parseFloat(pkg.price_normal||0);
+  return pkg ? parseFloat(pkg.price_normal||0) : 0;
 }
 
 function renderSelectedPackageItems(pkg){document.getElementById("settlePackageItems").textContent="套餐内容："+(pkg?packageItemSummary(pkg.items):"暂无");}
 function updateSettleTotal(){
-  const pkgId=parseInt(document.getElementById("settlePackage").value),pkg=packagesData.find(p=>p.id===pkgId);renderSelectedPackageItems(pkg);
-  if(!pkg){document.getElementById("settleRoomFee").textContent="0";document.getElementById("settleTotal").textContent="0";document.getElementById("maxDiscount").textContent="0";return;}
-  const roomFee=_getPkgPrice(pkg);document.getElementById("settleRoomFee").textContent=roomFee.toFixed(2);const drinksFee=parseFloat(document.getElementById("settleDrinksFee").textContent)||0,subtotal=roomFee+drinksFee,discount=parseFloat(document.getElementById("settleDiscount").value)||0,maxDisc=Math.round(subtotal*0.2*100)/100;document.getElementById("maxDiscount").textContent=maxDisc.toFixed(2);if(discount>maxDisc)document.getElementById("settleDiscount").value=maxDisc.toFixed(2);document.getElementById("settleTotal").textContent=Math.max(0,subtotal-Math.min(discount,maxDisc)).toFixed(2);
+  const pkgId=parseInt(document.getElementById("settlePackage").value);
+  const pkg=packagesData.find(p=>p.id===pkgId);
+  const actualInput=document.getElementById("settleActualTotal");
+  renderSelectedPackageItems(pkg);
+  if(!pkg){
+    document.getElementById("settleRoomFee").textContent="0.00";
+    document.getElementById("settleTotal").textContent="0.00";
+    if(actualInput.dataset.manual!=="1")actualInput.value="0.00";
+    updateSettlePriceHint();
+    return;
+  }
+  const roomFee=_getPkgPrice(pkg);
+  const drinksFee=parseFloat(document.getElementById("settleDrinksFee").textContent)||0;
+  const subtotal=Math.round((roomFee+drinksFee)*100)/100;
+  document.getElementById("settleRoomFee").textContent=roomFee.toFixed(2);
+  document.getElementById("settleTotal").textContent=subtotal.toFixed(2);
+  if(actualInput.dataset.manual!=="1")actualInput.value=subtotal.toFixed(2);
+  updateSettlePriceHint();
 }
+
+
+function onSettleActualPriceInput(){
+  document.getElementById("settleActualTotal").dataset.manual="1";
+  updateSettlePriceHint();
+}
+
+
+function updateSettlePriceHint(){
+  const expected=parseFloat(document.getElementById("settleTotal").textContent)||0;
+  const actual=parseFloat(document.getElementById("settleActualTotal").value);
+  const notes=document.getElementById("settleNotes").value.trim();
+  const hint=document.getElementById("settlePriceHint");
+  if(!Number.isFinite(actual)||actual<0){
+    hint.textContent="请输入有效的实际收银价格";
+    hint.style.color="var(--warning)";
+    return;
+  }
+  if(Math.abs(actual-expected)<0.01){
+    hint.textContent="实际收银价格与应收合计一致";
+    hint.style.color="var(--text-dim)";
+    return;
+  }
+  const remaining=Math.max(0,10-notes.length);
+  hint.textContent=remaining>0?"价格已修改，备注还需填写 "+remaining+" 个字":"价格已修改，备注已满足10字要求";
+  hint.style.color=remaining>0?"var(--warning)":"var(--accent)";
+}
+
+
+function getSettlementPricePayload(){
+  const expected=parseFloat(document.getElementById("settleTotal").textContent)||0;
+  const actual=parseFloat(document.getElementById("settleActualTotal").value);
+  const notes=document.getElementById("settleNotes").value.trim();
+  if(!Number.isFinite(actual)||actual<0){alert("请输入有效的实际收银价格");return null;}
+  if(Math.abs(actual-expected)>=0.01&&notes.length<10){alert("修改实际收银价格后，备注必须填写且至少10个字");document.getElementById("settleNotes").focus();return null;}
+  return {actual_total:actual,notes:notes||null};
+}
+
+
 function onSettlePaymentChange(){
 
   const v=document.getElementById("settlePayment").value;
@@ -1359,9 +1438,33 @@ function lookupSettleMember(){
 
 
 async function saveSettlementDraft(){
-  if(!currentBilling)return;const packageId=parseInt(document.getElementById("settlePackage").value);if(!packageId){alert("请选择套餐");return;}const data={package_id:packageId,payment_method:document.getElementById("settlePayment").value,discount:parseFloat(document.getElementById("settleDiscount").value)||0,notes:document.getElementById("settleNotes").value.trim()||null};
-  try{const r=await fetch(API.billingDraft+"/"+currentBilling.id+"/draft",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(data)}),j=await r.json();if(!r.ok||j.code!==0){alert("保存失败: "+(j.detail||"unknown"));return;}Object.assign(currentBilling,j);currentBilling.drinks=j.drinks||[];document.getElementById("settleDrinksFee").textContent=Number(j.drinks_fee||0).toFixed(2);renderSettleDrinkSummary(currentBilling.drinks);updateSettleTotal();fetchActiveBilling();fetchInventory();alert("当前账单版本已保存，套餐酒水库存已同步，尚未结账");}catch(e){alert("请求失败: "+e);}
+  if(!currentBilling)return;
+  const packageId=parseInt(document.getElementById("settlePackage").value);
+  if(!packageId){alert("请选择套餐");return;}
+  const pricing=getSettlementPricePayload();if(!pricing)return;
+  const data={
+    package_id:packageId,
+    payment_method:document.getElementById("settlePayment").value,
+    actual_total:pricing.actual_total,
+    notes:pricing.notes
+  };
+  try{
+    const r=await fetch(API.billingDraft+"/"+currentBilling.id+"/draft",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(data)}),j=await r.json();
+    if(!r.ok||j.code!==0){alert("保存失败: "+(j.detail||"unknown"));return;}
+    Object.assign(currentBilling,j);
+    currentBilling.drinks=j.drinks||[];
+    document.getElementById("settleDrinksFee").textContent=Number(j.drinks_fee||0).toFixed(2);
+    document.getElementById("settleActualTotal").value=Number(j.total||0).toFixed(2);
+    document.getElementById("settleActualTotal").dataset.manual=j.price_modified?"1":"0";
+    document.getElementById("settleNotes").value=j.notes||"";
+    renderSettleDrinkSummary(currentBilling.drinks);
+    updateSettleTotal();
+    fetchActiveBilling();fetchInventory();
+    alert("当前账单版本已保存，套餐酒水库存已同步，尚未结账");
+  }catch(e){alert("请求失败: "+e);}
 }
+
+
 async function confirmSettle(){
 
 
@@ -1382,7 +1485,7 @@ async function confirmSettle(){
 
 
 
-  const discount=parseFloat(document.getElementById("settleDiscount").value)||0;
+  const pricing=getSettlementPricePayload();if(!pricing)return;
 
 
 
@@ -1394,7 +1497,7 @@ async function confirmSettle(){
 
 
 
-  try{const r=await fetch(API.settle,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({billing_id:currentBilling.id,package_id:pkgId,payment_method:payment,discount,member_phone:document.getElementById("settleMemberPhone").value,member_password:mp,notes:document.getElementById("settleNotes").value.trim()||null})});const j=await r.json();if(j.code===0){const msg="结账成功！总计："+j.total.toFixed(2);alert(msg);hideSettle();fetchActiveBilling();fetchRooms();if(activeTab==="members")fetchMembers();fetchBillingHistory();}else alert("结账失败: "+(j.detail||"unknown"));}
+  try{const r=await fetch(API.settle,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({billing_id:currentBilling.id,package_id:pkgId,payment_method:payment,actual_total:pricing.actual_total,member_phone:document.getElementById("settleMemberPhone").value,member_password:mp,notes:pricing.notes})});const j=await r.json();if(j.code===0){const msg="结账成功！总计："+j.total.toFixed(2);alert(msg);hideSettle();fetchActiveBilling();fetchRooms();if(activeTab==="members")fetchMembers();fetchBillingHistory();}else alert("结账失败: "+(j.detail||"unknown"));}
 
 
 
@@ -1430,7 +1533,7 @@ async function fetchOpLogs(){try{const r=await fetch(API.operationLogs+"?limit=1
 
 
 
-function renderOpLogs(logs){const tb=document.querySelector("#logsTable tbody");if(!logs.length){tb.innerHTML='<tr><td colspan="4" class="empty-hint">暂无日志</td></tr>';return;}const labels={open_room:"开台",close_room:"关台",extend_room:"",auto_close:"定时关台",create_booking:"预",cancel_booking:"取消预订",booking_open:"预订开台",booking_failed:"预订失败",create_member:"新增会员",update_member:"编辑会员",recharge_member:"会员充值",reset_member_password:"重置密码",create_package:"新增套餐",update_package:"改",delete_package:"删除套餐",create_staff:"新增店内人员",update_staff:"编辑店内人员",delete_staff:"删除店内人员",create_inventory:"新库",update_inventory:"改库",delete_inventory:"删除库存",add_drink:"添加酒水",update_billing:"编辑账单",save_billing_draft:"保存账单",settle_billing:"结账",store_member_drink:"会员存酒",retrieve_member_drink:"会员取酒"};tb.innerHTML=logs.map(l=>{const t=l.created_at?l.created_at.replace("T"," ").substring(0,19):"-";return '<tr><td style="font-size:12px;color:var(--text-dim);white-space:nowrap;">'+t+'</td><td>'+(labels[l.action]||l.action)+'</td><td>'+(l.room_no||"-")+'</td><td style="font-size:13px;color:var(--text-dim);">'+(l.detail||"-")+'</td></tr>';}).join("");}
+function renderOpLogs(logs){const tb=document.querySelector("#logsTable tbody");if(!logs.length){tb.innerHTML='<tr><td colspan="4" class="empty-hint">暂无日志</td></tr>';return;}const labels={open_room:"开台",close_room:"关台",extend_room:"",auto_close:"定时关台",create_booking:"预",cancel_booking:"取消预订",booking_open:"预订开台",booking_failed:"预订失败",create_member:"新增会员",update_member:"编辑会员",recharge_member:"会员充值",reset_member_password:"重置密码",create_package:"新增套餐",update_package:"改",delete_package:"删除套餐",create_staff:"新增店内人员",update_staff:"编辑店内人员",delete_staff:"删除店内人员",create_inventory:"新库",update_inventory:"改库",delete_inventory:"删除库存",add_drink:"添加酒水",update_billing:"编辑账单",save_billing_draft:"保存账单",settle_billing:"结账",store_member_drink:"会员存酒",retrieve_member_drink:"会员取酒",create_billing_history:"新增结账记录",update_billing_history:"修改结账记录",create_recharge_log:"新增充卡流水",update_recharge_log:"修改充卡流水",delete_recharge_log:"删除充卡流水"};tb.innerHTML=logs.map(l=>{const t=l.created_at?l.created_at.replace("T"," ").substring(0,19):"-";return '<tr><td style="font-size:12px;color:var(--text-dim);white-space:nowrap;">'+t+'</td><td>'+(labels[l.action]||l.action)+'</td><td>'+(l.room_no||"-")+'</td><td style="font-size:13px;color:var(--text-dim);">'+(l.detail||"-")+'</td></tr>';}).join("");}
 
 
 
@@ -1454,86 +1557,202 @@ function renderOpLogs(logs){const tb=document.querySelector("#logsTable tbody");
 
 
 
-async function fetchBillingHistory(){try{const r=await fetch(API.billingHistory);const j=await r.json();if(j.code===0)renderBillingHistory(j.data);}catch(e){}}
+async function fetchBillingHistory(){
+  try{
+    const response=await fetch(API.billingHistory),json=await response.json();
+    if(!response.ok||json.code!==0)throw new Error(json.detail||"结账记录加载失败");
+    billingHistoryData=(json.data||[]).sort((a,b)=>_historyTimeValue(b.close_at)-_historyTimeValue(a.close_at)||b.id-a.id);
+    renderBillingHistory(billingHistoryData);
+  }catch(e){
+    document.querySelector("#historyTable tbody").innerHTML='<tr><td colspan="9" class="empty-hint">记录加载失败：'+escapeHtml(e.message)+'</td></tr>';
+  }
+}
 
 
+async function fetchRechargeLogs(){
+  try{
+    const response=await fetch(API.rechargeLogs),json=await response.json();
+    if(!response.ok||json.code!==0)throw new Error(json.detail||"充卡记录加载失败");
+    rechargeLogsData=(json.data||[]).sort((a,b)=>_historyTimeValue(b.created_at)-_historyTimeValue(a.created_at)||b.id-a.id);
+    renderRechargeLogs(rechargeLogsData);
+  }catch(e){
+    document.querySelector("#rechargeLogsTable tbody").innerHTML='<tr><td colspan="8" class="empty-hint">记录加载失败：'+escapeHtml(e.message)+'</td></tr>';
+  }
+}
 
 
-
+function _historyTimeValue(value){
+  if(!value)return 0;
+  const parsed=Date.parse(String(value).replace(" ","T"));
+  return Number.isFinite(parsed)?parsed:0;
+}
 
 
 function renderBillingHistory(bills){
-
-
-
   const tb=document.querySelector("#historyTable tbody");
-
-
-
   if(!bills.length){tb.innerHTML='<tr><td colspan="9" class="empty-hint">暂无记录</td></tr>';return;}
-
-
-
   tb.innerHTML=bills.map(b=>{
-
-
-
-    const t=b.close_at?b.close_at.replace("T"," ").substring(0,19):"-";
-
-
-
-    const drinks=(b.drinks||[]).map(d=>d.item_name+" x"+d.qty+" @"+(d.unit_price||0)).join(", ")||"-";
-    const member=b.settlement_member_name?(b.settlement_member_name+"（"+(b.settlement_member_phone||"无手机号")+"），余额 "+Number(b.member_balance_after||0).toFixed(2)):"-";
-
-
-
-    return '<tr><td>'+b.room_no+'</td><td>'+(b.room_fee||0).toFixed(2)+'</td><td>'+(b.drinks_fee||0).toFixed(2)+' <span style="font-size:11px;color:var(--text-dim);">('+drinks+')</span></td><td>'+(b.total||0).toFixed(2)+'</td><td>'+b.payment_method+'</td><td style="font-size:12px;">'+member+'</td><td>'+escapeHtml(b.notes||"-")+'</td><td style="font-size:12px;color:var(--text-dim);">'+t+'</td><td class="del-col" style="display:none;"><button class="btn btn-xs btn-danger del-btn" style="display:none;" onclick="deleteBilling('+b.id+')">删除</button></td></tr>';
-
-
-
+    const t=b.close_at?String(b.close_at).replace("T"," ").substring(0,19):"-";
+    const member=b.settlement_member_name?escapeHtml(b.settlement_member_name)+'<div style="font-size:11px;color:var(--text-dim);">'+escapeHtml(b.settlement_member_phone||"")+'</div>':"-";
+    const actions='<button class="btn btn-xs btn-outline admin-only" style="display:none;" onclick="showBillingHistoryModal('+b.id+')">修改</button> <button class="btn btn-xs btn-danger admin-only" style="display:none;" onclick="deleteBilling('+b.id+')">删除</button>';
+    return '<tr><td>'+escapeHtml(b.room_no||"-")+'</td><td>'+Number(b.room_fee||0).toFixed(2)+'</td><td>'+Number(b.drinks_fee||0).toFixed(2)+'</td><td>'+Number(b.total||0).toFixed(2)+'</td><td>'+escapeHtml(b.payment_method||"-")+'</td><td>'+member+'</td><td>'+escapeHtml(b.notes||"-")+'</td><td style="font-size:12px;color:var(--text-dim);">'+t+'</td><td class="del-col" style="display:none;">'+actions+'</td></tr>';
   }).join("");
   applyAdminToolsVisibility();
-
-
-
 }
 
 
+function renderRechargeLogs(logs){
+  const tb=document.querySelector("#rechargeLogsTable tbody");
+  if(!logs.length){tb.innerHTML='<tr><td colspan="8" class="empty-hint">暂无记录</td></tr>';return;}
+  tb.innerHTML=logs.map(r=>{
+    const t=r.created_at?String(r.created_at).replace("T"," ").substring(0,19):"-";
+    const member=escapeHtml(r.member_name||"-")+'<div style="font-size:11px;color:var(--text-dim);">'+escapeHtml(r.member_phone||"-")+'</div>';
+    const balance=r.balance_after==null?"-":Number(r.balance_after).toFixed(2);
+    const actions='<button class="btn btn-xs btn-outline admin-only" style="display:none;" onclick="showRechargeLogModal('+r.id+')">修改</button> <button class="btn btn-xs btn-danger admin-only" style="display:none;" onclick="deleteRechargeLog('+r.id+')">删除</button>';
+    return '<tr><td>'+member+'</td><td>'+escapeHtml(r.detail||"会员充卡")+'</td><td>'+Number(r.amount||0).toFixed(2)+'</td><td>'+balance+'</td><td>'+escapeHtml(r.payment_method||"-")+'</td><td>'+escapeHtml(r.notes||"-")+'</td><td style="font-size:12px;color:var(--text-dim);">'+t+'</td><td class="del-col" style="display:none;">'+actions+'</td></tr>';
+  }).join("");
+  applyAdminToolsVisibility();
+}
 
 
+function _nowForDateTimeInput(){
+  const now=new Date();
+  return new Date(now.getTime()-now.getTimezoneOffset()*60000).toISOString().slice(0,19);
+}
 
+
+function _toDateTimeInput(value){
+  return value?String(value).replace(" ","T").substring(0,19):_nowForDateTimeInput();
+}
+
+
+function showBillingHistoryModal(billingId=null){
+  if(!adminToolsVisible||!adminSessionPassword){alert("请先按 Ctrl+/ 验证管理密码");return;}
+  editingBillingHistoryId=billingId;
+  const bill=billingId==null?null:billingHistoryData.find(item=>item.id===billingId);
+  document.getElementById("billingHistoryModalTitle").textContent=bill?"修改结账记录":"新增结账记录";
+  document.getElementById("billingHistoryRoom").value=bill?.room_no||"";
+  document.getElementById("billingHistoryRoomFee").value=bill?Number(bill.room_fee||0).toFixed(2):"0.00";
+  document.getElementById("billingHistoryDrinksFee").value=bill?Number(bill.drinks_fee||0).toFixed(2):"0.00";
+  document.getElementById("billingHistoryTotal").value=bill?Number(bill.total||0).toFixed(2):"0.00";
+  document.getElementById("billingHistoryPayment").value=bill?.payment_method||"现金";
+  document.getElementById("billingHistoryMember").value=bill?.settlement_member_name||"";
+  document.getElementById("billingHistoryMemberPhone").value=bill?.settlement_member_phone||"";
+  document.getElementById("billingHistoryNotes").value=bill?.notes||"";
+  document.getElementById("billingHistoryTime").value=_toDateTimeInput(bill?.close_at);
+  showModal("billingHistoryModal");
+}
+
+
+async function confirmBillingHistory(){
+  if(!adminToolsVisible||!adminSessionPassword){alert("管理模式已关闭，请重新验证");return;}
+  const data={
+    room_no:document.getElementById("billingHistoryRoom").value.trim(),
+    room_fee:parseFloat(document.getElementById("billingHistoryRoomFee").value),
+    drinks_fee:parseFloat(document.getElementById("billingHistoryDrinksFee").value),
+    total:parseFloat(document.getElementById("billingHistoryTotal").value),
+    payment_method:document.getElementById("billingHistoryPayment").value.trim(),
+    settlement_member_name:document.getElementById("billingHistoryMember").value.trim()||null,
+    settlement_member_phone:document.getElementById("billingHistoryMemberPhone").value.trim()||null,
+    notes:document.getElementById("billingHistoryNotes").value.trim()||null,
+    close_at:document.getElementById("billingHistoryTime").value,
+    admin_password:adminSessionPassword
+  };
+  if(!data.room_no||!data.payment_method||!data.close_at||![data.room_fee,data.drinks_fee,data.total].every(v=>Number.isFinite(v)&&v>=0)){alert("请完整填写有效字段");return;}
+  const url=editingBillingHistoryId==null?API.billingHistory:API.billingHistory+"/"+editingBillingHistoryId;
+  try{
+    const r=await fetch(url,{method:editingBillingHistoryId==null?"POST":"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(data)}),j=await r.json();
+    if(!r.ok||j.code!==0){alert("保存失败: "+(j.detail||j.msg||"unknown"));return;}
+    closeModal("billingHistoryModal");editingBillingHistoryId=null;fetchBillingHistory();
+  }catch(e){alert("请求失败: "+e);}
+}
+
+
+async function showRechargeLogModal(logId=null){
+  if(!adminToolsVisible||!adminSessionPassword){alert("请先按 Ctrl+/ 验证管理密码");return;}
+  if(!membersData.length)await fetchMembers();
+  if(!membersData.length){alert("请先添加会员");return;}
+  editingRechargeLogId=logId;
+  const select=document.getElementById("rechargeLogMember");
+  select.innerHTML=membersData.map(m=>'<option value="'+m.id+'">'+escapeHtml(m.name)+'（'+escapeHtml(m.phone)+'）</option>').join("");
+  const log=logId==null?null:rechargeLogsData.find(r=>r.id===logId);
+  document.getElementById("rechargeLogModalTitle").textContent=log?"修改充卡记录":"新增充卡记录";
+  if(log){
+    select.value=String(log.member_id);
+    document.getElementById("rechargeLogMemberName").value=log.member_name||"";
+    document.getElementById("rechargeLogMemberPhone").value=log.member_phone||"";
+    document.getElementById("rechargeLogAmount").value=Number(log.amount||0).toFixed(2);
+    document.getElementById("rechargeLogBalance").value=log.balance_after==null?"":Number(log.balance_after).toFixed(2);
+    document.getElementById("rechargeLogDetail").value=log.detail||"会员充卡";
+    document.getElementById("rechargeLogMethod").value=log.payment_method||"现金";
+    document.getElementById("rechargeLogNotes").value=log.notes||"";
+    document.getElementById("rechargeLogTime").value=_toDateTimeInput(log.created_at);
+  }else{
+    onRechargeLogMemberChange();
+    document.getElementById("rechargeLogAmount").value="";
+    document.getElementById("rechargeLogBalance").value=Number(membersData[0].balance||0).toFixed(2);
+    document.getElementById("rechargeLogDetail").value="会员充卡";
+    document.getElementById("rechargeLogMethod").value="现金";
+    document.getElementById("rechargeLogNotes").value="";
+    document.getElementById("rechargeLogTime").value=_nowForDateTimeInput();
+  }
+  showModal("rechargeLogModal");
+}
+
+
+function onRechargeLogMemberChange(){
+  const memberId=parseInt(document.getElementById("rechargeLogMember").value);
+  const member=membersData.find(m=>m.id===memberId);if(!member)return;
+  document.getElementById("rechargeLogMemberName").value=member.name||"";
+  document.getElementById("rechargeLogMemberPhone").value=member.phone||"";
+  if(editingRechargeLogId==null)document.getElementById("rechargeLogBalance").value=Number(member.balance||0).toFixed(2);
+}
+
+
+async function confirmRechargeLog(){
+  if(!adminToolsVisible||!adminSessionPassword){alert("管理模式已关闭，请重新验证");return;}
+  const data={
+    member_id:parseInt(document.getElementById("rechargeLogMember").value),
+    member_name:document.getElementById("rechargeLogMemberName").value.trim(),
+    member_phone:document.getElementById("rechargeLogMemberPhone").value.trim(),
+    detail:document.getElementById("rechargeLogDetail").value.trim(),
+    amount:parseFloat(document.getElementById("rechargeLogAmount").value),
+    balance_after:parseFloat(document.getElementById("rechargeLogBalance").value),
+    payment_method:document.getElementById("rechargeLogMethod").value.trim(),
+    notes:document.getElementById("rechargeLogNotes").value.trim()||null,
+    created_at:document.getElementById("rechargeLogTime").value,
+    admin_password:adminSessionPassword
+  };
+  if(!data.member_id||!data.member_name||!data.member_phone||!data.detail||!data.payment_method||!Number.isFinite(data.amount)||data.amount<=0||!Number.isFinite(data.balance_after)||data.balance_after<0||!data.created_at){alert("请完整填写有效字段");return;}
+  const url=editingRechargeLogId==null?API.rechargeLogs:API.rechargeLogs+"/"+editingRechargeLogId;
+  try{
+    const r=await fetch(url,{method:editingRechargeLogId==null?"POST":"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(data)}),j=await r.json();
+    if(!r.ok||j.code!==0){alert("保存失败: "+(j.detail||j.msg||"unknown"));return;}
+    closeModal("rechargeLogModal");editingRechargeLogId=null;fetchRechargeLogs();
+  }catch(e){alert("请求失败: "+e);}
+}
+
+
+async function deleteRechargeLog(logId){
+  if(!adminToolsVisible||!adminSessionPassword){alert("请先按 Ctrl+/ 验证管理密码");return;}
+  if(!confirm("确认删除这条充卡记录？该操作不会修改会员当前余额。"))return;
+  try{
+    const r=await fetch(API.rechargeLogs+"/"+logId+"?admin_password="+encodeURIComponent(adminSessionPassword),{method:"DELETE"}),j=await r.json();
+    if(!r.ok||j.code!==0){alert("删除失败: "+(j.detail||j.msg||"unknown"));return;}
+    fetchRechargeLogs();
+  }catch(e){alert("请求失败: "+e);}
+}
 
 
 async function deleteBilling(billingId){
-
-
-
-  if(!confirm("确认删除该结账记录？"))return;
-
-
-
-  const pwd=prompt("请输入管理密码");
-
-
-
-  if(!pwd)return;
-
-
-
-  try{const r=await fetch(API.billingDelete+"/"+billingId+"?admin_password="+encodeURIComponent(pwd),{method:"DELETE"});const j=await r.json();if(j.code===0)fetchBillingHistory();else alert("删除失败: "+(j.detail||"unknown"));}
-
-
-
-  catch(e){alert("请求失败: "+e);}
-
-
-
+  if(!adminToolsVisible||!adminSessionPassword){alert("请先按 Ctrl+/ 验证管理密码");return;}
+  if(!confirm("确认删除该结账记录？该操作只删除历史记录。"))return;
+  try{
+    const r=await fetch(API.billingDelete+"/"+billingId+"?admin_password="+encodeURIComponent(adminSessionPassword),{method:"DELETE"}),j=await r.json();
+    if(!r.ok||j.code!==0){alert("删除失败: "+(j.detail||j.msg||"unknown"));return;}
+    fetchBillingHistory();
+  }catch(e){alert("请求失败: "+e);}
 }
-
-
-
-
-
 
 
 // ---- Room lock: check unpaid bills before opening ----

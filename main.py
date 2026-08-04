@@ -13,14 +13,14 @@ from fastapi.staticfiles import StaticFiles
 
 from database import init_db, get_db, log_operation, verify_admin_password
 from models import (
-    AddDrinkRequest, BookingRequest, CreateInventoryRequest, CreateMemberRequest, CreateStaffRequest,
+    AddDrinkRequest, BillingHistoryWriteRequest, BookingRequest, CreateInventoryRequest, CreateMemberRequest, CreateStaffRequest,
     CloseRequest, CreatePackageRequest, DeletePackageRequest, ExtendRequest, OpenRequest,
-    RechargeRequest, ResetMemberPasswordRequest, RetrieveMemberDrinkRequest, SaveBillingDraftRequest, SettlementRequest,
+    RechargeLogWriteRequest, RechargeRequest, ResetMemberPasswordRequest, RetrieveMemberDrinkRequest, SaveBillingDraftRequest, SettlementRequest,
     StoreMemberDrinkRequest, UpdateBillingRequest, UpdateInventoryRequest, UpdateMemberRequest, UpdatePackageRequest, UpdateStaffRequest,
     VerifyAdminRequest, VerifyMemberRequest,
 )
 from scheduler import (
-    execute_device_command, ktv_get, restore_all_schedules,
+    execute_device_command, ktv_get, ktv_post, restore_all_schedules,
     schedule_auto_close, schedule_booking, start_device_command_worker,
 )
 from state_manager import state_mgr
@@ -41,6 +41,15 @@ def _inventory_tracks_stock(category: str) -> bool:
 
 def _get_package_price(pkg: dict) -> float:
     return float(pkg.get("price_normal", 0) or 0)
+
+
+def _resolve_actual_total(subtotal: float, requested_total: float | None, notes: str | None):
+    total = round(subtotal if requested_total is None else requested_total, 2)
+    normalized_notes = (notes or "").strip() or None
+    price_modified = abs(total - subtotal) >= 0.01
+    if price_modified and len(normalized_notes or "") < 10:
+        raise HTTPException(400, "修改实际收银价格后，备注必须填写且至少10个字")
+    return total, normalized_notes, price_modified
 
 
 @asynccontextmanager
@@ -246,6 +255,19 @@ async def close_room(req: CloseRequest):
     finally:
         conn.close()
     return {"code": 0, "msg": "ok", "billing_id": billing["id"] if billing else None}
+
+
+@app.post("/api/rooms/device-close")
+async def device_close_room(req: CloseRequest):
+    """Call the KTV close endpoint once without changing billing or timer state."""
+    try:
+        device_response = await ktv_post(
+            "/fangtai/close",
+            [{"room_ip": req.room_ip, "room_name": req.room_name}],
+        )
+    except Exception as e:
+        raise HTTPException(502, f"设备关台失败: {e}")
+    return {"code": 0, "msg": "ok", "device_response": device_response}
 
 
 @app.post("/api/rooms/extend")
@@ -475,11 +497,113 @@ async def recharge_member(member_id: int, req: RechargeRequest):
             raise HTTPException(404, "会员不存在")
         new_balance = round(member["balance"] + req.amount, 2)
         conn.execute("UPDATE members SET balance = ? WHERE id = ?", (new_balance, member_id))
-        conn.execute("INSERT INTO recharge_logs (member_id, amount, payment_method) VALUES (?, ?, ?)",
-                     (member_id, req.amount, req.payment_method))
+        conn.execute(
+            """INSERT INTO recharge_logs
+               (member_id, member_name, member_phone, amount, balance_after, payment_method, detail, notes)
+               VALUES (?, ?, ?, ?, ?, ?, '会员充卡', ?)""",
+            (member_id, member["name"], member["phone"], req.amount, new_balance, req.payment_method, (req.notes or "").strip() or None),
+        )
         conn.commit()
-        log_operation("recharge_member", None, f"会员充值 {member['name']} +{req.amount}")
+        log_operation("recharge_member", None, f"会员充值 {member['name']} amount={req.amount:.2f} balance_after={new_balance:.2f}")
         return {"code": 0, "msg": "ok", "balance": new_balance}
+    finally:
+        conn.close()
+
+
+def _recharge_log_time(value: datetime) -> str:
+    if value.tzinfo is not None:
+        value = value.astimezone().replace(tzinfo=None)
+    return value.strftime("%Y-%m-%d %H:%M:%S")
+
+
+@app.get("/api/recharge-logs")
+async def list_recharge_logs():
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            """SELECT id, member_id, member_name, member_phone, amount,
+                      balance_after, payment_method, detail, notes, created_at
+               FROM recharge_logs
+               ORDER BY datetime(created_at) DESC, id DESC
+               LIMIT 1000"""
+        ).fetchall()
+        return {"code": 0, "data": [dict(row) for row in rows]}
+    finally:
+        conn.close()
+
+
+@app.post("/api/recharge-logs")
+async def create_recharge_log(req: RechargeLogWriteRequest):
+    if not verify_admin_password(req.admin_password):
+        raise HTTPException(403, "管理密码错误")
+    conn = get_db()
+    try:
+        member = conn.execute("SELECT id FROM members WHERE id = ?", (req.member_id,)).fetchone()
+        if not member:
+            raise HTTPException(404, "会员不存在")
+        created_at = _recharge_log_time(req.created_at)
+        conn.execute(
+            """INSERT INTO recharge_logs
+               (member_id, member_name, member_phone, amount, balance_after, payment_method, detail, notes, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                req.member_id, req.member_name, req.member_phone,
+                round(req.amount, 2), round(req.balance_after, 2),
+                req.payment_method, req.detail, (req.notes or "").strip() or None, created_at,
+            ),
+        )
+        log_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        conn.commit()
+        log_operation("create_recharge_log", None, f"手工新增充卡流水 id={log_id} member={req.member_name} amount={req.amount}")
+        return {"code": 0, "msg": "ok", "id": log_id}
+    finally:
+        conn.close()
+
+
+@app.put("/api/recharge-logs/{log_id}")
+async def update_recharge_log(log_id: int, req: RechargeLogWriteRequest):
+    if not verify_admin_password(req.admin_password):
+        raise HTTPException(403, "管理密码错误")
+    conn = get_db()
+    try:
+        existing = conn.execute("SELECT id FROM recharge_logs WHERE id = ?", (log_id,)).fetchone()
+        if not existing:
+            raise HTTPException(404, "充卡流水不存在")
+        member = conn.execute("SELECT id FROM members WHERE id = ?", (req.member_id,)).fetchone()
+        if not member:
+            raise HTTPException(404, "会员不存在")
+        conn.execute(
+            """UPDATE recharge_logs
+               SET member_id = ?, member_name = ?, member_phone = ?, amount = ?,
+                   balance_after = ?, payment_method = ?, detail = ?, notes = ?, created_at = ?
+               WHERE id = ?""",
+            (
+                req.member_id, req.member_name, req.member_phone,
+                round(req.amount, 2), round(req.balance_after, 2),
+                req.payment_method, req.detail, (req.notes or "").strip() or None,
+                _recharge_log_time(req.created_at), log_id,
+            ),
+        )
+        conn.commit()
+        log_operation("update_recharge_log", None, f"修改充卡流水 id={log_id} member={req.member_name} amount={req.amount}")
+        return {"code": 0, "msg": "ok"}
+    finally:
+        conn.close()
+
+
+@app.delete("/api/recharge-logs/{log_id}")
+async def delete_recharge_log(log_id: int, admin_password: str = ""):
+    if not verify_admin_password(admin_password):
+        raise HTTPException(403, "管理密码错误")
+    conn = get_db()
+    try:
+        existing = conn.execute("SELECT * FROM recharge_logs WHERE id = ?", (log_id,)).fetchone()
+        if not existing:
+            raise HTTPException(404, "充卡流水不存在")
+        conn.execute("DELETE FROM recharge_logs WHERE id = ?", (log_id,))
+        conn.commit()
+        log_operation("delete_recharge_log", None, f"删除充卡流水 id={log_id}")
+        return {"code": 0, "msg": "ok"}
     finally:
         conn.close()
 
@@ -1033,19 +1157,14 @@ async def save_billing_draft(billing_id: int, req: SaveBillingDraftRequest):
         room_fee = _get_package_price(dict(package))
         drinks_fee = _sync_billing_package_items(conn, billing_id, req.package_id)
         subtotal = round(room_fee + drinks_fee, 2)
-        discount = round(req.discount, 2)
-        max_discount = round(subtotal * 0.2, 2)
-        if discount > max_discount:
-            raise HTTPException(400, f"优惠金额不能超过总额的20%（最多{max_discount}）")
-        total = round(subtotal - discount, 2)
-        notes = (req.notes or "").strip() or None
+        total, notes, price_modified = _resolve_actual_total(subtotal, req.actual_total, req.notes)
 
         conn.execute(
             """UPDATE billing_records
                SET package_id = ?, room_fee = ?, drinks_fee = ?, total = ?,
-                   discount = ?, payment_method = ?, notes = ?
+                   discount = 0, payment_method = ?, notes = ?
                WHERE id = ? AND status = 'open'""",
-            (req.package_id, room_fee, drinks_fee, total, discount, req.payment_method, notes, billing_id),
+            (req.package_id, room_fee, drinks_fee, total, req.payment_method, notes, billing_id),
         )
         drinks = [dict(row) for row in conn.execute(
             "SELECT * FROM drink_orders WHERE billing_id = ? ORDER BY id", (billing_id,)
@@ -1054,14 +1173,15 @@ async def save_billing_draft(billing_id: int, req: SaveBillingDraftRequest):
         log_operation(
             "save_billing_draft", billing["room_no"],
             f"billing={billing_id} package={req.package_id} drinks_fee={drinks_fee} "
-            f"discount={discount} total={total} payment={req.payment_method} notes={notes or ''}",
+            f"calculated_total={subtotal} actual_total={total} price_modified={price_modified} "
+            f"payment={req.payment_method} notes={notes or ''}",
         )
         return {
             "code": 0, "msg": "ok", "billing_id": billing_id,
             "package_id": req.package_id, "room_fee": room_fee,
-            "drinks_fee": drinks_fee, "discount": discount,
-            "total": total, "payment_method": req.payment_method,
-            "notes": notes, "drinks": drinks,
+            "drinks_fee": drinks_fee, "calculated_total": subtotal,
+            "total": total, "price_modified": price_modified,
+            "payment_method": req.payment_method, "notes": notes, "drinks": drinks,
         }
     except Exception:
         conn.rollback()
@@ -1224,12 +1344,7 @@ async def settle_billing(req: SettlementRequest):
         room_fee = _get_package_price(dict(pkg))
         drinks_fee = _sync_billing_package_items(conn, req.billing_id, req.package_id)
         subtotal = round(room_fee + drinks_fee, 2)
-        discount = round(req.discount, 2)
-        max_discount = round(subtotal * 0.2, 2)
-        if discount > max_discount:
-            raise HTTPException(400, f"优惠金额不能超过总额的20% (最多{max_discount})")
-        total = round(subtotal - discount, 2)
-        notes = (req.notes or "").strip() or None
+        total, notes, price_modified = _resolve_actual_total(subtotal, req.actual_total, req.notes)
 
         payment_method = req.payment_method
         member = None
@@ -1274,14 +1389,14 @@ async def settle_billing(req: SettlementRequest):
         conn.execute(
             """UPDATE billing_records
                SET package_id = ?, close_at = datetime('now', 'localtime'),
-                   room_fee = ?, drinks_fee = ?, total = ?, discount = ?,
+                   room_fee = ?, drinks_fee = ?, total = ?, discount = 0,
                    cash_supplement = 0, payment_method = ?, notes = ?,
                    settlement_member_id = ?, settlement_member_name = ?,
                    settlement_member_phone = ?, member_balance_after = ?,
                    status = 'closed'
                WHERE id = ?""",
             (
-                req.package_id, room_fee, drinks_fee, total, discount, payment_method, notes,
+                req.package_id, room_fee, drinks_fee, total, payment_method, notes,
                 settlement_member_id, settlement_member_name, settlement_member_phone,
                 member_balance_after, req.billing_id,
             ),
@@ -1298,12 +1413,14 @@ async def settle_billing(req: SettlementRequest):
             )
         log_operation(
             "settle_billing", room_name,
-            f"结账 room_fee={room_fee} drinks_fee={drinks_fee} discount={discount} "
-            f"total={total} payment={payment_method} notes={notes or ''} room_kept_open=true{member_detail}",
+            f"结账 room_fee={room_fee} drinks_fee={drinks_fee} calculated_total={subtotal} "
+            f"actual_total={total} price_modified={price_modified} payment={payment_method} "
+            f"notes={notes or ''} room_kept_open=true{member_detail}",
         )
         return {
             "code": 0, "msg": "ok", "total": total, "room_fee": room_fee,
-            "discount": discount, "cash_supplement": 0, "payment_method": payment_method,
+            "calculated_total": subtotal, "cash_supplement": 0,
+            "payment_method": payment_method, "price_modified": price_modified,
             "notes": notes, "room_kept_open": True,
             "settlement_member_name": settlement_member_name,
             "settlement_member_phone": settlement_member_phone,
@@ -1330,6 +1447,68 @@ async def list_billing_history():
             bill["drinks"] = [dict(d) for d in drinks]
             result.append(bill)
         return {"code": 0, "data": result}
+    finally:
+        conn.close()
+
+
+@app.post("/api/billing/history")
+async def create_billing_history(req: BillingHistoryWriteRequest):
+    if not verify_admin_password(req.admin_password):
+        raise HTTPException(403, "管理密码错误")
+    conn = get_db()
+    try:
+        close_at = _recharge_log_time(req.close_at)
+        conn.execute(
+            """INSERT INTO billing_records
+               (room_no, open_at, close_at, room_fee, drinks_fee, total, discount,
+                payment_method, settlement_member_name, settlement_member_phone,
+                notes, status)
+               VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, 'closed')""",
+            (
+                req.room_no, close_at, close_at, round(req.room_fee, 2),
+                round(req.drinks_fee, 2), round(req.total, 2), req.payment_method,
+                (req.settlement_member_name or "").strip() or None,
+                (req.settlement_member_phone or "").strip() or None,
+                (req.notes or "").strip() or None,
+            ),
+        )
+        billing_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        conn.commit()
+        log_operation("create_billing_history", req.room_no, f"手工新增结账记录 id={billing_id} total={req.total}")
+        return {"code": 0, "msg": "ok", "id": billing_id}
+    finally:
+        conn.close()
+
+
+@app.put("/api/billing/history/{billing_id}")
+async def update_billing_history(billing_id: int, req: BillingHistoryWriteRequest):
+    if not verify_admin_password(req.admin_password):
+        raise HTTPException(403, "管理密码错误")
+    conn = get_db()
+    try:
+        existing = conn.execute(
+            "SELECT id FROM billing_records WHERE id = ? AND status = 'closed'", (billing_id,)
+        ).fetchone()
+        if not existing:
+            raise HTTPException(404, "结账记录不存在")
+        conn.execute(
+            """UPDATE billing_records
+               SET room_no = ?, room_fee = ?, drinks_fee = ?, total = ?, discount = 0,
+                   payment_method = ?, settlement_member_name = ?,
+                   settlement_member_phone = ?, notes = ?, close_at = ?
+               WHERE id = ?""",
+            (
+                req.room_no, round(req.room_fee, 2), round(req.drinks_fee, 2),
+                round(req.total, 2), req.payment_method,
+                (req.settlement_member_name or "").strip() or None,
+                (req.settlement_member_phone or "").strip() or None,
+                (req.notes or "").strip() or None,
+                _recharge_log_time(req.close_at), billing_id,
+            ),
+        )
+        conn.commit()
+        log_operation("update_billing_history", req.room_no, f"修改结账记录 id={billing_id} total={req.total}")
+        return {"code": 0, "msg": "ok"}
     finally:
         conn.close()
 
