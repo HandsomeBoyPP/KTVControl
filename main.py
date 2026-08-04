@@ -15,7 +15,7 @@ from database import init_db, get_db, log_operation, verify_admin_password
 from models import (
     AddDrinkRequest, BillingHistoryWriteRequest, BookingRequest, CreateInventoryRequest, CreateMemberRequest, CreateStaffRequest,
     CloseRequest, CreatePackageRequest, DeletePackageRequest, ExtendRequest, OpenRequest,
-    RechargeLogWriteRequest, RechargeRequest, ResetMemberPasswordRequest, RetrieveMemberDrinkRequest, SaveBillingDraftRequest, SettlementRequest,
+    ExpireMemberDrinkRequest, RechargeLogWriteRequest, RechargeRequest, ResetMemberPasswordRequest, RetrieveMemberDrinkRequest, SaveBillingDraftRequest, SettlementRequest,
     StoreMemberDrinkRequest, UpdateBillingRequest, UpdateInventoryRequest, UpdateMemberRequest, UpdatePackageRequest, UpdateStaffRequest,
     VerifyAdminRequest, VerifyMemberRequest,
 )
@@ -656,6 +656,15 @@ async def store_member_drink(member_id: int, req: StoreMemberDrinkRequest):
         member = conn.execute("SELECT id, name FROM members WHERE id = ?", (member_id,)).fetchone()
         if not member:
             raise HTTPException(404, "会员不存在")
+        expired = conn.execute(
+            """SELECT id FROM member_stored_drinks
+               WHERE member_id = ? AND status = 'active' AND quantity > 0
+                 AND datetime(expires_at) < datetime('now', 'localtime')
+               LIMIT 1""",
+            (member_id,),
+        ).fetchone()
+        if expired:
+            raise HTTPException(409, "该会员存在过期存酒，请先完成过期处理")
         stored_at = datetime.now().replace(microsecond=0)
         expires_at = stored_at + timedelta(days=30)
         cursor = conn.execute(
@@ -751,6 +760,116 @@ async def retrieve_member_drink(member_id: int, storage_id: int, req: RetrieveMe
         raise
     finally:
         conn.close()
+
+@app.post("/api/members/{member_id}/stored-drinks/{storage_id}/expire")
+async def process_expired_member_drink(
+    member_id: int, storage_id: int, req: ExpireMemberDrinkRequest
+):
+    conn = get_db()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        member = conn.execute(
+            "SELECT id, name FROM members WHERE id = ?", (member_id,)
+        ).fetchone()
+        if not member:
+            raise HTTPException(404, "会员不存在")
+        stored = conn.execute(
+            """SELECT * FROM member_stored_drinks
+               WHERE id = ? AND member_id = ? AND status = 'active'""",
+            (storage_id, member_id),
+        ).fetchone()
+        if not stored or stored["quantity"] <= 0:
+            raise HTTPException(404, "存酒记录不存在或已处理")
+        if datetime.fromisoformat(stored["expires_at"]) >= datetime.now():
+            raise HTTPException(409, "存酒尚未过期，不能进行过期处理")
+
+        quantity = int(stored["quantity"])
+        if req.action == "inventory":
+            inventory = conn.execute(
+                "SELECT id, name, category, stock FROM inventory WHERE id = ?",
+                (req.inventory_id,),
+            ).fetchone()
+            if not inventory:
+                raise HTTPException(404, "库存商品不存在")
+            if inventory["category"] != "酒水":
+                raise HTTPException(400, "过期存酒只能转入酒水分类库存")
+            before_stock = int(inventory["stock"] or 0)
+            after_stock = before_stock + quantity
+            conn.execute(
+                "UPDATE inventory SET stock = ? WHERE id = ?",
+                (after_stock, inventory["id"]),
+            )
+            conn.execute(
+                """UPDATE member_stored_drinks
+                   SET quantity = 0, status = 'expired_to_inventory',
+                       updated_at = datetime('now', 'localtime')
+                   WHERE id = ?""",
+                (storage_id,),
+            )
+            detail = (
+                f"过期处理：转入库存 {inventory['name']}；"
+                f"库存 {before_stock}->{after_stock}"
+            )
+            conn.execute(
+                """INSERT INTO member_storage_logs
+                   (member_id, storage_id, action, item_name, storage_kind,
+                    quantity, remaining_level, before_quantity, after_quantity, detail)
+                   VALUES (?, ?, 'expire_to_inventory', ?, ?, ?, ?, ?, 0, ?)""",
+                (
+                    member_id, storage_id, stored["item_name"],
+                    stored["storage_kind"], quantity, stored["remaining_level"],
+                    quantity, detail,
+                ),
+            )
+            conn.commit()
+            log_operation(
+                "expire_drink_to_inventory", None,
+                f"过期存酒转库存 member={member['name']} 酒水={stored['item_name']} "
+                f"数量={quantity} 库存商品={inventory['name']} 库存={before_stock}->{after_stock}",
+            )
+            return {
+                "code": 0,
+                "msg": "已转入库存",
+                "inventory_id": inventory["id"],
+                "stock": after_stock,
+            }
+
+        now = datetime.now().replace(microsecond=0)
+        new_expires_at = now + timedelta(days=req.extend_days)
+        conn.execute(
+            """UPDATE member_stored_drinks
+               SET expires_at = ?, updated_at = datetime('now', 'localtime')
+               WHERE id = ?""",
+            (new_expires_at.isoformat(sep=" "), storage_id),
+        )
+        detail = f"过期处理：从处理日起延长 {req.extend_days} 天，到期={new_expires_at:%Y-%m-%d}"
+        conn.execute(
+            """INSERT INTO member_storage_logs
+               (member_id, storage_id, action, item_name, storage_kind,
+                quantity, remaining_level, before_quantity, after_quantity, detail)
+               VALUES (?, ?, 'expire_extend', ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                member_id, storage_id, stored["item_name"], stored["storage_kind"],
+                quantity, stored["remaining_level"], quantity, quantity, detail,
+            ),
+        )
+        conn.commit()
+        log_operation(
+            "extend_expired_drink", None,
+            f"过期存酒延期 member={member['name']} 酒水={stored['item_name']} "
+            f"延长={req.extend_days}天 到期={new_expires_at:%Y-%m-%d}",
+        )
+        return {
+            "code": 0,
+            "msg": "有效期已延长",
+            "expires_at": new_expires_at.isoformat(sep=" "),
+        }
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
 
 # ---- Package Routes ----
 

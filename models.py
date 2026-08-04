@@ -110,6 +110,19 @@ class RetrieveMemberDrinkRequest(RequestModel):
     quantity: int = Field(default=1, gt=0)
     notes: str | None = Field(default=None, max_length=200)
 
+
+class ExpireMemberDrinkRequest(RequestModel):
+    action: Literal["inventory", "extend"]
+    inventory_id: int | None = Field(default=None, gt=0)
+    extend_days: int = Field(default=30, gt=0, le=365)
+
+    @model_validator(mode="after")
+    def validate_expire_action(self) -> Self:
+        if self.action == "inventory" and self.inventory_id is None:
+            raise ValueError("退回库存时必须选择库存商品")
+        return self
+
+
 class PackageItemRequest(RequestModel):
     item_type: Literal["drink", "snack"]
     inventory_id: int | None = Field(default=None, gt=0)

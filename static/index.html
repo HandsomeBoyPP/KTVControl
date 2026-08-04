@@ -158,7 +158,7 @@
     </div>
     <div class="table-wrap">
       <table class="data-table" id="rechargeLogsTable">
-        <thead><tr><th>会员</th><th>明细</th><th>金额</th><th>余额</th><th>支付方式</th><th>备注</th><th>时间</th><th class="del-col" style="display:none;">操作</th></tr></thead>
+        <thead><tr><th>会员</th><th>明细</th><th>支付金额</th><th>余额</th><th>支付方式</th><th>备注</th><th>时间</th><th class="del-col" style="display:none;">操作</th></tr></thead>
         <tbody><tr><td colspan="8" class="empty-hint">暂无记录</td></tr></tbody>
       </table>
     </div>
@@ -482,7 +482,7 @@
 <div class="modal-overlay" id="storedDrinksModal">
   <div class="modal stored-drinks-modal">
     <h3>会员存酒 - <span id="storedDrinksMemberLabel">--</span></h3>
-    <p class="section-note stored-drinks-note">手动登记，不联动门店库存和收银账单。每次存酒自登记起有效期 30 天。</p>
+    <p class="section-note stored-drinks-note">正常存酒和取酒不联动库存；过期处理选择“转入库存”时才增加库存。每次存酒自登记起有效期 30 天。</p>
 
     <div class="stored-drink-form">
       <div class="form-group"><label>酒水名称</label><input type="text" id="storedDrinkName" list="storedDrinkOptions" maxlength="64" placeholder="选择或输入酒水"><datalist id="storedDrinkOptions"></datalist></div>
@@ -513,6 +513,35 @@
     </details>
 
     <div class="modal-actions"><button class="btn btn-secondary" onclick="closeModal('storedDrinksModal')">关闭</button></div>
+  </div>
+</div>
+
+<!-- Expired Stored Drink Modal -->
+<div class="modal-overlay" id="expiredDrinkModal">
+  <div class="modal">
+    <h3>过期处理 - <span id="expiredDrinkLabel">--</span></h3>
+    <p id="expiredDrinkSummary" class="section-note"></p>
+    <div class="form-group">
+      <label>处理方式</label>
+      <select id="expiredDrinkAction" onchange="onExpiredDrinkActionChange()">
+        <option value="inventory">转入库存</option>
+        <option value="extend">延长有效期</option>
+      </select>
+    </div>
+    <div class="form-group" id="expiredDrinkInventoryGroup">
+      <label>转入酒水库存</label>
+      <select id="expiredDrinkInventory"></select>
+      <small style="display:block;color:var(--text-dim);margin-top:4px;">确认后按当前存酒瓶数增加库存，并结束这条存酒记录。</small>
+    </div>
+    <div class="form-group" id="expiredDrinkExtendGroup" style="display:none;">
+      <label>延长天数</label>
+      <input type="number" id="expiredDrinkExtendDays" value="30" min="1" max="365" step="1">
+      <small style="display:block;color:var(--text-dim);margin-top:4px;">从处理当天开始重新计算有效期。</small>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" onclick="closeModal('expiredDrinkModal')">取消</button>
+      <button class="btn btn-primary" id="confirmExpiredDrink">确认处理</button>
+    </div>
   </div>
 </div>
 
@@ -650,8 +679,8 @@
     <div class="form-group"><label>关联会员</label><select id="rechargeLogMember" onchange="onRechargeLogMemberChange()"></select></div>
     <div class="form-group"><label>会员姓名</label><input type="text" id="rechargeLogMemberName" maxlength="64"></div>
     <div class="form-group"><label>会员手机号</label><input type="text" id="rechargeLogMemberPhone" maxlength="32"></div>
-    <div class="form-group"><label>充卡金额</label><input type="number" id="rechargeLogAmount" min="0.01" step="0.01"></div>
-    <div class="form-group"><label>充值后余额</label><input type="number" id="rechargeLogBalance" min="0" step="0.01"></div>
+    <div class="form-group"><label>支付金额</label><input type="number" id="rechargeLogAmount" min="0.01" step="0.01"></div>
+    <div class="form-group"><label>余额</label><input type="number" id="rechargeLogBalance" min="0" step="0.01"></div>
     <div class="form-group"><label>明细</label><input type="text" id="rechargeLogDetail" maxlength="200" value="会员充卡"></div>
     <div class="form-group"><label>支付方式</label><input type="text" id="rechargeLogMethod" maxlength="32" list="paymentMethodOptions" value="现金"></div>
     <div class="form-group"><label>备注</label><input type="text" id="rechargeLogNotes" maxlength="200"></div>
@@ -675,7 +704,7 @@
     </div>
   </div>
 </div>
-<script src="/static/app.js?v=25"></script>
+<script src="/static/app.js?v=26"></script>
 
 
 

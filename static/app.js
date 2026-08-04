@@ -68,7 +68,7 @@ const API = {
 
 let roomsData=[], membersData=[], packagesData=[], inventoryData=[], staffData=[], activeBillingData=[], billingHistoryData=[], rechargeLogsData=[];
 let editingPackageItems=[];
-let currentStoredDrinkMember=null, memberStoredDrinksData=[];
+let currentStoredDrinkMember=null, memberStoredDrinksData=[], currentExpiredDrinkId=null;
 
 
 
@@ -157,6 +157,7 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("confirmResetPwd")?.addEventListener("click", confirmResetPwd);
 
   document.getElementById("confirmStoreDrink")?.addEventListener("click", confirmStoreDrink);
+  document.getElementById("confirmExpiredDrink")?.addEventListener("click", confirmExpiredDrink);
 
 
 
@@ -797,12 +798,18 @@ function renderMemberStoredDrinks(records,logs){
     const opened=item.storage_kind==="opened";
     const amount=opened?("已开封 · 剩余 "+escapeHtml(item.remaining_level||"未记录")):(item.quantity+" 瓶（未开封）");
     const expiry=item.is_expired?'<span class="storage-expiry expired">已过期</span>':'<span class="storage-expiry">剩 '+item.days_remaining+' 天</span>';
-    return '<tr class="'+(item.is_expired?'stored-drink-expired':'')+'"><td><strong>'+escapeHtml(item.item_name)+'</strong>'+(item.notes?'<div class="cell-note">'+escapeHtml(item.notes)+'</div>':'')+'</td><td>'+amount+'</td><td>'+escapeHtml(item.storage_location||"-")+'</td><td class="cell-time">'+escapeHtml((item.stored_at||"").substring(0,16))+'</td><td class="cell-time">'+escapeHtml((item.expires_at||"").substring(0,16))+'<br>'+expiry+'</td><td><button class="btn btn-xs btn-outline" onclick="retrieveStoredDrink('+item.id+')">取酒</button></td></tr>';
+    const expireDisabled=item.is_expired?'':' disabled title="存酒尚未过期"';
+    return '<tr class="'+(item.is_expired?'stored-drink-expired':'')+'"><td><strong>'+escapeHtml(item.item_name)+'</strong>'+(item.notes?'<div class="cell-note">'+escapeHtml(item.notes)+'</div>':'')+'</td><td>'+amount+'</td><td>'+escapeHtml(item.storage_location||"-")+'</td><td class="cell-time">'+escapeHtml((item.stored_at||"").substring(0,16))+'</td><td class="cell-time">'+escapeHtml((item.expires_at||"").substring(0,16))+'<br>'+expiry+'</td><td><button class="btn btn-xs btn-outline" onclick="retrieveStoredDrink('+item.id+')">取酒</button> <button class="btn btn-xs btn-accent" onclick="showExpiredDrinkModal('+item.id+')"'+expireDisabled+'>过期处理</button></td></tr>';
   }).join("");
+  const storeButton=document.getElementById("confirmStoreDrink");
+  const hasExpired=records.some(item=>item.is_expired);
+  storeButton.disabled=hasExpired;
+  storeButton.title=hasExpired?"该会员有过期存酒，请先处理后再新增存酒":"";
   const ltb=document.querySelector("#storedDrinkLogsTable tbody");
   if(!logs.length)ltb.innerHTML='<tr><td colspan="6" class="empty-hint">暂无记录</td></tr>';
   else ltb.innerHTML=logs.map(log=>{
-    const action=log.action==="store"?"存酒":"取酒";
+    const actionLabels={store:"存酒",retrieve:"取酒",expire_to_inventory:"过期转库存",expire_extend:"过期延期"};
+    const action=actionLabels[log.action]||log.action;
     const kind=log.storage_kind==="opened"?("（已开封 "+escapeHtml(log.remaining_level||"")+'）'):"";
     return '<tr><td class="cell-time">'+escapeHtml((log.created_at||"").substring(0,16))+'</td><td>'+action+'</td><td>'+escapeHtml(log.item_name)+kind+'</td><td>'+log.quantity+' 瓶</td><td>'+log.before_quantity+' → '+log.after_quantity+'</td><td>'+escapeHtml(log.detail||"-")+'</td></tr>';
   }).join("");
@@ -850,6 +857,70 @@ async function retrieveStoredDrink(storageId){
     await fetchMemberStoredDrinks();
   }catch(e){alert("取酒失败: "+e);}
 }
+
+async function showExpiredDrinkModal(storageId){
+  if(!currentStoredDrinkMember)return;
+  const item=memberStoredDrinksData.find(record=>record.id===storageId);
+  if(!item)return;
+  if(!item.is_expired){alert("存酒尚未过期，不能进行过期处理");return;}
+  currentExpiredDrinkId=storageId;
+  document.getElementById("expiredDrinkLabel").textContent=item.item_name;
+  document.getElementById("expiredDrinkSummary").textContent=
+    currentStoredDrinkMember.name+" · "+item.quantity+" 瓶 · 到期时间 "+String(item.expires_at||"").substring(0,16);
+  document.getElementById("expiredDrinkAction").value="inventory";
+  document.getElementById("expiredDrinkExtendDays").value="30";
+  try{
+    const r=await fetch(API.inventory),j=await r.json();
+    if(!r.ok||j.code!==0)throw new Error(j.detail||"库存读取失败");
+    const inventories=(j.data||[]).filter(x=>x.category==="酒水").sort((a,b)=>{
+      if(a.name===item.item_name&&b.name!==item.item_name)return -1;
+      if(b.name===item.item_name&&a.name!==item.item_name)return 1;
+      return String(a.name).localeCompare(String(b.name),"zh-CN");
+    });
+    document.getElementById("expiredDrinkInventory").innerHTML=inventories.length
+      ?inventories.map(x=>'<option value="'+x.id+'">'+escapeHtml(x.name)+'（当前 '+Number(x.stock||0)+' 瓶）</option>').join("")
+      :'<option value="">暂无酒水库存商品</option>';
+    onExpiredDrinkActionChange();
+    showModal("expiredDrinkModal");
+  }catch(e){alert("打开过期处理失败: "+e.message);}
+}
+
+
+function onExpiredDrinkActionChange(){
+  const action=document.getElementById("expiredDrinkAction").value;
+  document.getElementById("expiredDrinkInventoryGroup").style.display=action==="inventory"?"block":"none";
+  document.getElementById("expiredDrinkExtendGroup").style.display=action==="extend"?"block":"none";
+}
+
+
+async function confirmExpiredDrink(){
+  if(!currentStoredDrinkMember||!currentExpiredDrinkId)return;
+  const action=document.getElementById("expiredDrinkAction").value;
+  const data={action};
+  if(action==="inventory"){
+    data.inventory_id=parseInt(document.getElementById("expiredDrinkInventory").value,10);
+    if(!data.inventory_id){alert("请先在库存管理添加酒水商品，或选择延长有效期");return;}
+  }else{
+    data.extend_days=parseInt(document.getElementById("expiredDrinkExtendDays").value,10);
+    if(!Number.isInteger(data.extend_days)||data.extend_days<1||data.extend_days>365){alert("延长天数请输入 1 到 365");return;}
+  }
+  const item=memberStoredDrinksData.find(record=>record.id===currentExpiredDrinkId);
+  const message=action==="inventory"
+    ?"确认把 "+item.item_name+" "+item.quantity+" 瓶转入所选库存？"
+    :"确认从今天起延长 "+data.extend_days+" 天？";
+  if(!confirm(message))return;
+  try{
+    const url=API.members+"/"+currentStoredDrinkMember.id+"/stored-drinks/"+currentExpiredDrinkId+"/expire";
+    const r=await fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(data)}),j=await r.json();
+    if(!r.ok||j.code!==0){alert("过期处理失败: "+(j.detail||j.msg||"unknown"));return;}
+    closeModal("expiredDrinkModal");
+    currentExpiredDrinkId=null;
+    await fetchMemberStoredDrinks();
+    if(action==="inventory")await fetchInventory();
+    alert(j.msg||"处理成功");
+  }catch(e){alert("过期处理失败: "+e);}
+}
+
 
 function showMemberModal(){
   document.getElementById("memberName").value="";
@@ -1533,7 +1604,7 @@ async function fetchOpLogs(){try{const r=await fetch(API.operationLogs+"?limit=1
 
 
 
-function renderOpLogs(logs){const tb=document.querySelector("#logsTable tbody");if(!logs.length){tb.innerHTML='<tr><td colspan="4" class="empty-hint">暂无日志</td></tr>';return;}const labels={open_room:"开台",close_room:"关台",extend_room:"",auto_close:"定时关台",create_booking:"预",cancel_booking:"取消预订",booking_open:"预订开台",booking_failed:"预订失败",create_member:"新增会员",update_member:"编辑会员",recharge_member:"会员充值",reset_member_password:"重置密码",create_package:"新增套餐",update_package:"改",delete_package:"删除套餐",create_staff:"新增店内人员",update_staff:"编辑店内人员",delete_staff:"删除店内人员",create_inventory:"新库",update_inventory:"改库",delete_inventory:"删除库存",add_drink:"添加酒水",update_billing:"编辑账单",save_billing_draft:"保存账单",settle_billing:"结账",store_member_drink:"会员存酒",retrieve_member_drink:"会员取酒",create_billing_history:"新增结账记录",update_billing_history:"修改结账记录",create_recharge_log:"新增充卡流水",update_recharge_log:"修改充卡流水",delete_recharge_log:"删除充卡流水"};tb.innerHTML=logs.map(l=>{const t=l.created_at?l.created_at.replace("T"," ").substring(0,19):"-";return '<tr><td style="font-size:12px;color:var(--text-dim);white-space:nowrap;">'+t+'</td><td>'+(labels[l.action]||l.action)+'</td><td>'+(l.room_no||"-")+'</td><td style="font-size:13px;color:var(--text-dim);">'+(l.detail||"-")+'</td></tr>';}).join("");}
+function renderOpLogs(logs){const tb=document.querySelector("#logsTable tbody");if(!logs.length){tb.innerHTML='<tr><td colspan="4" class="empty-hint">暂无日志</td></tr>';return;}const labels={open_room:"开台",close_room:"关台",extend_room:"",auto_close:"定时关台",create_booking:"预",cancel_booking:"取消预订",booking_open:"预订开台",booking_failed:"预订失败",create_member:"新增会员",update_member:"编辑会员",recharge_member:"会员充值",reset_member_password:"重置密码",create_package:"新增套餐",update_package:"改",delete_package:"删除套餐",create_staff:"新增店内人员",update_staff:"编辑店内人员",delete_staff:"删除店内人员",create_inventory:"新库",update_inventory:"改库",delete_inventory:"删除库存",add_drink:"添加酒水",update_billing:"编辑账单",save_billing_draft:"保存账单",settle_billing:"结账",store_member_drink:"会员存酒",retrieve_member_drink:"会员取酒",expire_drink_to_inventory:"过期存酒转库存",extend_expired_drink:"过期存酒延期",create_billing_history:"新增结账记录",update_billing_history:"修改结账记录",create_recharge_log:"新增充卡流水",update_recharge_log:"修改充卡流水",delete_recharge_log:"删除充卡流水"};tb.innerHTML=logs.map(l=>{const t=l.created_at?l.created_at.replace("T"," ").substring(0,19):"-";return '<tr><td style="font-size:12px;color:var(--text-dim);white-space:nowrap;">'+t+'</td><td>'+(labels[l.action]||l.action)+'</td><td>'+(l.room_no||"-")+'</td><td style="font-size:13px;color:var(--text-dim);">'+(l.detail||"-")+'</td></tr>';}).join("");}
 
 
 
