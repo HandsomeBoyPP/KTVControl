@@ -1373,8 +1373,9 @@ function showSettle(billingId){
     const savedTotal=Number(bill.total||0);
     const selectedPackage=packagesData.find(p=>p.id===parseInt(pkgSel.value));
     const currentExpected=Number(_getPkgPrice(selectedPackage)||0)+Number(bill.drinks_fee||0);
-    actualInput.value=savedTotal>0?savedTotal.toFixed(2):"";
-    actualInput.dataset.manual=savedTotal>0&&Math.abs(savedTotal-currentExpected)>=0.01?"1":"0";
+    const hasSavedDraft=bill.package_id!==null&&bill.package_id!==undefined;
+    actualInput.value=hasSavedDraft?savedTotal.toFixed(2):"";
+    actualInput.dataset.manual=hasSavedDraft&&Math.abs(savedTotal-currentExpected)>=0.01?"1":"0";
 
 
 
