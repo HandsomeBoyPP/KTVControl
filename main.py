@@ -20,7 +20,7 @@ from models import (
     VerifyAdminRequest, VerifyMemberRequest,
 )
 from scheduler import (
-    execute_device_command, ktv_get, ktv_post, restore_all_schedules,
+    cancel_auto_close, execute_device_command, ktv_get, ktv_post, restore_all_schedules,
     schedule_auto_close, schedule_booking, start_device_command_worker,
 )
 from state_manager import state_mgr
@@ -219,15 +219,21 @@ async def open_room(req: OpenRequest):
     finally:
         conn.close()
 
+    cancel_auto_close(req.room_ip, req.room_name, "房间重新开台，旧定时任务已失效")
+    auto_close_at = None
     if req.duration_type == "timed":
-        close_at = (state_mgr.now + timedelta(minutes=duration)).isoformat()
-        state_mgr.set_auto_close(req.room_name, req.room_ip, close_at)
-        schedule_auto_close(req.room_ip, req.room_name, close_at)
-    else:
-        state_mgr.set_auto_close(req.room_name, req.room_ip, None)
+        auto_close_at = (state_mgr.now + timedelta(minutes=duration)).isoformat()
+        state_mgr.set_auto_close(req.room_name, req.room_ip, auto_close_at)
+        schedule_auto_close(req.room_ip, req.room_name, auto_close_at)
     dur_str = "永久" if req.duration_type == "unlimited" else f"{duration}min"
-    log_operation("open_room", req.room_name, f"开台 IP={req.room_ip} duration={dur_str} billing={billing_id}")
-    return {"code": 0, "msg": "ok", "billing_id": billing_id}
+    log_operation(
+        "open_room", req.room_name,
+        f"开台 IP={req.room_ip} duration={dur_str} auto_close_at={auto_close_at or '无'} billing={billing_id}",
+    )
+    return {
+        "code": 0, "msg": "ok", "billing_id": billing_id,
+        "duration_minutes": duration, "auto_close_at": auto_close_at,
+    }
 @app.post("/api/rooms/close")
 async def close_room(req: CloseRequest):
     try:
@@ -242,10 +248,7 @@ async def close_room(req: CloseRequest):
     except Exception as e:
         raise HTTPException(502, f"关台设备指令已记录，将继续重试: {e}")
     log_operation("close_room", req.room_name, f"关台 IP={req.room_ip} (账单保留待结账)")
-    if req.room_name in state_mgr.auto_close_tasks:
-        state_mgr.auto_close_tasks[req.room_name].cancel()
-        del state_mgr.auto_close_tasks[req.room_name]
-    state_mgr.set_auto_close(req.room_name, req.room_ip, None)
+    cancel_auto_close(req.room_ip, req.room_name, "房间已手动关台")
     conn = get_db()
     try:
         billing = conn.execute(
@@ -1523,6 +1526,10 @@ async def settle_billing(req: SettlementRequest):
         conn.commit()
 
         room_name = billing["room_no"]
+        cancel_auto_close(
+            billing["room_ip"] or "", room_name,
+            "账单已结算，房间保持开台，自动关台任务已取消",
+        )
         member_detail = ""
         if settlement_member_id is not None:
             member_detail = (

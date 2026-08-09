@@ -130,6 +130,30 @@ class StateManager:
         finally:
             conn.close()
 
+    def auto_close_matches(self, room_name: str, room_ip: str, close_at: str) -> bool:
+        current = self.get_auto_close(room_name)
+        return bool(
+            current
+            and current.get("room_ip") == room_ip
+            and current.get("close_at") == close_at
+        )
+
+    def clear_auto_close_if_current(
+        self, room_name: str, room_ip: str, close_at: str
+    ) -> bool:
+        conn = get_db()
+        try:
+            cursor = conn.execute(
+                """DELETE FROM auto_close_schedules
+                   WHERE room_name = ? AND room_ip = ? AND close_at = ?
+                     AND status = 'pending'""",
+                (room_name, room_ip, close_at),
+            )
+            conn.commit()
+            return cursor.rowcount == 1
+        finally:
+            conn.close()
+
     def get_all_auto_close(self) -> dict:
         conn = get_db()
         try:

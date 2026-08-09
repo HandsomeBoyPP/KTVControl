@@ -16,6 +16,63 @@ logger = logging.getLogger("ktv")
 KTV_API_BASE = "http://192.168.110.201:18888"
 
 
+class StaleAutoCloseCommand(RuntimeError):
+    """Raised when an old auto-close command no longer owns the room timer."""
+
+
+def _room_has_open_billing(room_name: str, room_ip: str) -> bool:
+    conn = get_db()
+    try:
+        row = conn.execute(
+            """SELECT id FROM billing_records
+               WHERE room_no = ? AND room_ip = ? AND status = 'open'
+               ORDER BY id DESC LIMIT 1""",
+            (room_name, room_ip),
+        ).fetchone()
+        return row is not None
+    finally:
+        conn.close()
+
+
+def _auto_close_command_is_current(command: dict) -> bool:
+    if command.get("action") != "auto_close":
+        return True
+    room_name = command.get("room_no") or ""
+    prefix = f"auto-close:{room_name}:"
+    key = command.get("idempotency_key") or ""
+    if not room_name or not key.startswith(prefix):
+        return False
+    close_at = key[len(prefix):]
+    current = state_mgr.get_auto_close(room_name)
+    if not current or current.get("close_at") != close_at:
+        return False
+    try:
+        payload = json.loads(command.get("payload_json") or "[]")
+        room_ip = payload[0].get("room_ip") if payload else None
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return False
+    return bool(
+        room_ip
+        and current.get("room_ip") == room_ip
+        and _room_has_open_billing(room_name, room_ip)
+    )
+
+
+def _cancel_device_command(command_id: int, reason: str):
+    conn = get_db()
+    try:
+        conn.execute(
+            """UPDATE device_commands
+               SET retryable = 0, status = 'cancelled', last_error = ?,
+                   updated_at = datetime('now', 'localtime')
+               WHERE id = ?""",
+            (reason[:500], command_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 async def ktv_get(path: str, params: dict | None = None) -> dict:
     def _do():
         resp = requests.get(f"{KTV_API_BASE}{path}", params=params, timeout=10)
@@ -70,18 +127,38 @@ async def _process_device_command(command_id: int) -> dict:
         command = dict(row)
         if command["status"] == "succeeded":
             return json.loads(command["response_json"] or "{}")
+        if command["status"] == "cancelled":
+            raise StaleAutoCloseCommand(command["last_error"] or "设备指令已取消")
         if command["status"] == "processing":
             raise RuntimeError("设备指令正在执行")
-        conn.execute(
+        if not _auto_close_command_is_current(command):
+            reason = "旧自动关台任务已失效，已阻止执行"
+            conn.execute(
+                """UPDATE device_commands
+                   SET retryable = 0, status = 'cancelled', last_error = ?,
+                       updated_at = datetime('now', 'localtime')
+                   WHERE id = ?""",
+                (reason, command_id),
+            )
+            conn.commit()
+            raise StaleAutoCloseCommand(reason)
+        claimed = conn.execute(
             """UPDATE device_commands
                SET status = 'processing', attempts = attempts + 1,
                    last_error = NULL, updated_at = datetime('now', 'localtime')
-               WHERE id = ?""",
+               WHERE id = ? AND status IN ('pending', 'failed')""",
             (command_id,),
         )
         conn.commit()
+        if claimed.rowcount != 1:
+            raise RuntimeError("设备指令已被其他服务进程接管")
     finally:
         conn.close()
+
+    if not _auto_close_command_is_current(command):
+        reason = "自动关台执行前计时已变更，已阻止旧任务"
+        _cancel_device_command(command_id, reason)
+        raise StaleAutoCloseCommand(reason)
 
     try:
         response = await ktv_post(command["api_path"], json.loads(command["payload_json"]))
@@ -92,7 +169,7 @@ async def _process_device_command(command_id: int) -> dict:
                 """UPDATE device_commands
                    SET status = 'failed', last_error = ?,
                        updated_at = datetime('now', 'localtime')
-                   WHERE id = ?""",
+                   WHERE id = ? AND status = 'processing'""",
                 (str(exc)[:500], command_id),
             )
             conn.commit()
@@ -106,14 +183,13 @@ async def _process_device_command(command_id: int) -> dict:
             """UPDATE device_commands
                SET status = 'succeeded', response_json = ?, last_error = NULL,
                    updated_at = datetime('now', 'localtime')
-               WHERE id = ?""",
+               WHERE id = ? AND status = 'processing'""",
             (json.dumps(response, ensure_ascii=False), command_id),
         )
         conn.commit()
     finally:
         conn.close()
     return response
-
 
 async def execute_device_command(
     action: str,
@@ -153,6 +229,8 @@ async def retry_device_commands_once():
             await _process_device_command(int(row["id"]))
         except asyncio.CancelledError:
             raise
+        except StaleAutoCloseCommand as exc:
+            logger.info(f"Skipped stale auto-close command id={row['id']}: {exc}")
         except Exception as exc:
             logger.warning(f"Device command retry failed id={row['id']}: {exc}")
 
@@ -184,6 +262,23 @@ def start_device_command_worker():
 
 async def do_auto_close(room_ip: str, room_name: str, close_at_iso: str):
     while True:
+        schedule_matches = state_mgr.auto_close_matches(
+            room_name, room_ip, close_at_iso
+        )
+        billing_is_open = _room_has_open_billing(room_name, room_ip)
+        if not schedule_matches or not billing_is_open:
+            if schedule_matches:
+                state_mgr.clear_auto_close_if_current(
+                    room_name, room_ip, close_at_iso
+                )
+            logger.info(
+                f"[AutoClose skipped stale] {room_name} -> {close_at_iso} "
+                f"schedule_matches={schedule_matches} billing_open={billing_is_open}"
+            )
+            current_task = asyncio.current_task()
+            if state_mgr.auto_close_tasks.get(room_name) is current_task:
+                state_mgr.auto_close_tasks.pop(room_name, None)
+            return
         try:
             logger.info(f"[AutoClose] {room_name}")
             await execute_device_command(
@@ -193,17 +288,24 @@ async def do_auto_close(room_ip: str, room_name: str, close_at_iso: str):
                 idempotency_key=f"auto-close:{room_name}:{close_at_iso}",
                 retryable=True,
             )
-            state_mgr.set_auto_close(room_name, room_ip, None)
-            state_mgr.auto_close_tasks.pop(room_name, None)
-            log_operation("auto_close", room_name, f"定时关台 IP={room_ip}")
+            state_mgr.clear_auto_close_if_current(room_name, room_ip, close_at_iso)
+            current_task = asyncio.current_task()
+            if state_mgr.auto_close_tasks.get(room_name) is current_task:
+                state_mgr.auto_close_tasks.pop(room_name, None)
+            log_operation("auto_close", room_name, f"定时关台 IP={room_ip} 计划={close_at_iso}")
             logger.info(f"[AutoClose OK] {room_name}")
             return
         except asyncio.CancelledError:
             raise
+        except StaleAutoCloseCommand as exc:
+            state_mgr.clear_auto_close_if_current(
+                room_name, room_ip, close_at_iso
+            )
+            logger.info(f"[AutoClose cancelled stale] {room_name}: {exc}")
+            return
         except Exception as exc:
             logger.error(f"[AutoClose FAIL] {room_name}: {exc}, retry in 30s")
             await asyncio.sleep(30)
-
 
 def schedule_auto_close(room_ip: str, room_name: str, close_at_iso: str):
     if room_name in state_mgr.auto_close_tasks:
@@ -225,30 +327,29 @@ def schedule_auto_close(room_ip: str, room_name: str, close_at_iso: str):
     logger.info(f"[Scheduled] {room_name} -> {close_at_iso}")
 
 
-def cancel_auto_close(room_ip: str, room_name: str):
+def cancel_auto_close(
+    room_ip: str, room_name: str, reason: str = "自动关台任务已取消"
+):
     """Cancel every deferred auto-close path while keeping the room powered on."""
     task = state_mgr.auto_close_tasks.pop(room_name, None)
     if task:
         task.cancel()
     state_mgr.set_auto_close(room_name, room_ip, None)
 
-    # Failed auto-close commands are retried by the durable command worker.
-    # Disable those retries so settlement cannot close the room later.
+    # Failed auto-close commands must never be retried against a later room session.
     conn = get_db()
     try:
         conn.execute(
             """UPDATE device_commands
                SET retryable = 0, status = 'cancelled',
-                   last_error = '\u8d26\u5355\u5df2\u7ed3\u7b97\uff0c\u623f\u95f4\u4fdd\u6301\u5f00\u53f0',
-                   updated_at = datetime('now', 'localtime')
+                   last_error = ?, updated_at = datetime('now', 'localtime')
                WHERE action = 'auto_close' AND room_no = ?
-                 AND status IN ('pending', 'failed')""",
-            (room_name,),
+                 AND status IN ('pending', 'failed', 'processing')""",
+            (reason, room_name),
         )
         conn.commit()
     finally:
         conn.close()
-
 
 async def do_booking_open(booking: dict):
     bid, rip, rname = booking["id"], booking["room_ip"], booking["room_name"]

@@ -1298,10 +1298,13 @@ async function fetchActiveBilling(){try{const r=await fetch(API.billingActive);c
 
 function renderActiveBilling(bills){
   const tb=document.querySelector("#billingTable tbody");
-  if(!bills.length){tb.innerHTML='<tr><td colspan="5" class="empty-hint">\u6682\u65e0\u5f00\u53f0\u8d26\u5355</td></tr>';return;}
+  if(!bills.length){tb.innerHTML='<tr><td colspan="6" class="empty-hint">\u6682\u65e0\u5f00\u53f0\u8d26\u5355</td></tr>';return;}
   tb.innerHTML=bills.map(b=>{
     const ct=b.customer_type==="retail"?"\u6563\u6237":("\u4f1a\u5458(id="+b.member_id+")");
-    return '<tr><td>'+b.room_no+'</td><td>'+(b.duration_minutes||0)+'</td><td>'+Number(b.drinks_fee||0).toFixed(2)+'</td><td>'+ct+'</td><td><button class="btn btn-xs btn-accent" onclick="showSettle('+b.id+')">\u7ed3\u8d26</button></td></tr>';
+    const received=b.package_id===null||b.package_id===undefined
+      ?'<span style="color:var(--text-dim);">\u672a\u4fdd\u5b58</span>'
+      :'<strong style="color:var(--accent);">'+Number(b.total||0).toFixed(2)+'</strong>';
+    return '<tr><td>'+b.room_no+'</td><td>'+(b.duration_minutes||0)+'</td><td>'+Number(b.drinks_fee||0).toFixed(2)+'</td><td>'+received+'</td><td>'+ct+'</td><td><button class="btn btn-xs btn-accent" onclick="showSettle('+b.id+')">\u7ed3\u8d26</button></td></tr>';
   }).join("");
 }
 
