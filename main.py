@@ -1559,11 +1559,7 @@ async def settle_billing(req: SettlementRequest):
 
 # ---- Business Report Routes ----
 
-@app.get("/api/reports/daily")
-async def get_daily_business_report(date: str = "", x_records_password: str = Header(default="")):
-    """Return one business day, which runs from 06:00 to 05:59 the next day."""
-    if not verify_records_password(x_records_password):
-        raise HTTPException(403, "记录查看密码错误")
+def _business_day_bounds(date: str = "") -> tuple[datetime, datetime]:
     now = datetime.now()
     if date:
         try:
@@ -1572,10 +1568,14 @@ async def get_daily_business_report(date: str = "", x_records_password: str = He
             raise HTTPException(400, "日期格式应为 YYYY-MM-DD")
     else:
         business_date = now if now.hour >= 6 else now - timedelta(days=1)
-        business_date = business_date.replace(hour=0, minute=0, second=0, microsecond=0)
-
     start_at = business_date.replace(hour=6, minute=0, second=0, microsecond=0)
-    end_at = start_at + timedelta(days=1)
+    return start_at, start_at + timedelta(days=1)
+
+
+def _build_daily_business_report(date: str = "") -> dict:
+    """Build one live business day from source billing and recharge records."""
+    start_at, end_at = _business_day_bounds(date)
+
     start_text = start_at.strftime("%Y-%m-%d %H:%M:%S")
     end_text = end_at.strftime("%Y-%m-%d %H:%M:%S")
 
@@ -1649,20 +1649,39 @@ async def get_daily_business_report(date: str = "", x_records_password: str = He
         conn.close()
 
 
+@app.get("/api/reports/daily")
+async def get_daily_business_report(date: str = "", x_records_password: str = Header(default="")):
+    if not verify_records_password(x_records_password):
+        raise HTTPException(403, "记录查看密码错误")
+    return _build_daily_business_report(date)
+
+
 # ---- Billing History Routes ----
 
 @app.get("/api/billing/history")
-async def list_billing_history():
+async def list_billing_history(date: str = ""):
+    start_at, end_at = _business_day_bounds(date)
+    start_text = start_at.strftime("%Y-%m-%d %H:%M:%S")
+    end_text = end_at.strftime("%Y-%m-%d %H:%M:%S")
     conn = get_db()
     try:
-        rows = conn.execute("SELECT * FROM billing_records WHERE status = 'closed' ORDER BY close_at DESC LIMIT 200").fetchall()
+        rows = conn.execute(
+            """SELECT * FROM billing_records
+               WHERE status = 'closed' AND close_at >= ? AND close_at < ?
+               ORDER BY close_at DESC, id DESC""",
+            (start_text, end_text),
+        ).fetchall()
         result = []
         for r in rows:
             bill = dict(r)
             drinks = conn.execute("SELECT * FROM drink_orders WHERE billing_id = ?", (r["id"],)).fetchall()
             bill["drinks"] = [dict(d) for d in drinks]
             result.append(bill)
-        return {"code": 0, "data": result}
+        return {
+            "code": 0, "data": result,
+            "business_date": start_at.strftime("%Y-%m-%d"),
+            "start_at": start_text, "end_at": end_text,
+        }
     finally:
         conn.close()
 
@@ -1766,13 +1785,25 @@ async def verify_admin(req: VerifyAdminRequest):
 # ---- Operation Log Routes ----
 
 @app.get("/api/operation-logs")
-async def list_operation_logs(limit: int = 100, x_records_password: str = Header(default="")):
+async def list_operation_logs(date: str = "", limit: int = 1000, x_records_password: str = Header(default="")):
     if not verify_records_password(x_records_password):
         raise HTTPException(403, "记录查看密码错误")
+    start_at, end_at = _business_day_bounds(date)
+    start_text = start_at.strftime("%Y-%m-%d %H:%M:%S")
+    end_text = end_at.strftime("%Y-%m-%d %H:%M:%S")
     conn = get_db()
     try:
-        rows = conn.execute("SELECT * FROM operation_logs ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
-        return {"code": 0, "data": [dict(r) for r in rows]}
+        rows = conn.execute(
+            """SELECT * FROM operation_logs
+               WHERE created_at >= ? AND created_at < ?
+               ORDER BY created_at DESC, id DESC LIMIT ?""",
+            (start_text, end_text, limit),
+        ).fetchall()
+        return {
+            "code": 0, "data": [dict(r) for r in rows],
+            "business_date": start_at.strftime("%Y-%m-%d"),
+            "start_at": start_text, "end_at": end_text,
+        }
     finally:
         conn.close()
 

@@ -346,11 +346,11 @@ function switchTab(tab){
   }else if(tab==="staff"){
     fetchStaff();
   }else if(tab==="history"){
-    fetchBillingHistory();
+    initBillingHistory();
   }else if(tab==="recharges"){
     fetchRechargeLogs();
   }else if(tab==="logs"){
-    fetchOpLogs();
+    initOperationLogs();
   }
 }
 
@@ -1424,13 +1424,14 @@ async function fetchActiveBilling(){try{const r=await fetch(API.billingActive);c
 
 function renderActiveBilling(bills){
   const tb=document.querySelector("#billingTable tbody");
-  if(!bills.length){tb.innerHTML='<tr><td colspan="6" class="empty-hint">\u6682\u65e0\u5f00\u53f0\u8d26\u5355</td></tr>';return;}
+  if(!bills.length){tb.innerHTML='<tr><td colspan="7" class="empty-hint">\u6682\u65e0\u5f00\u53f0\u8d26\u5355</td></tr>';return;}
   tb.innerHTML=bills.map(b=>{
     const ct=b.customer_type==="retail"?"\u6563\u6237":("\u4f1a\u5458(id="+b.member_id+")");
     const received=b.package_id===null||b.package_id===undefined
       ?'<span style="color:var(--text-dim);">\u672a\u4fdd\u5b58</span>'
       :'<strong style="color:var(--accent);">'+Number(b.total||0).toFixed(2)+'</strong>';
-    return '<tr><td>'+b.room_no+'</td><td>'+(b.duration_minutes||0)+'</td><td>'+Number(b.drinks_fee||0).toFixed(2)+'</td><td>'+received+'</td><td>'+ct+'</td><td><button class="btn btn-xs btn-accent" onclick="showSettle('+b.id+')">\u7ed3\u8d26</button></td></tr>';
+    const openTime=b.open_at?String(b.open_at).replace("T"," ").substring(0,19):"-";
+    return '<tr><td>'+b.room_no+'</td><td class="cell-time">'+openTime+'</td><td>'+(b.duration_minutes||0)+'</td><td>'+Number(b.drinks_fee||0).toFixed(2)+'</td><td>'+received+'</td><td>'+ct+'</td><td><button class="btn btn-xs btn-accent" onclick="showSettle('+b.id+')">\u7ed3\u8d26</button></td></tr>';
   }).join("");
 }
 
@@ -1730,7 +1731,41 @@ async function confirmSettle(){
 
 
 
-async function fetchOpLogs(){try{const r=await fetch(API.operationLogs+"?limit=100",{headers:{"X-Records-Password":recordsSessionPassword}});const j=await r.json();if(j.code===0)renderOpLogs(j.data);}catch(e){}}
+function initOperationLogs(){
+  const input=document.getElementById("logsDate");
+  if(!input.value)input.value=_currentBusinessDate();
+  fetchOpLogs();
+}
+
+function setLogsToday(){
+  document.getElementById("logsDate").value=_currentBusinessDate();
+  fetchOpLogs();
+}
+
+function changeLogsDate(offset){
+  const input=document.getElementById("logsDate");
+  const parts=(input.value||_currentBusinessDate()).split("-").map(Number);
+  const date=new Date(parts[0],parts[1]-1,parts[2]);
+  date.setDate(date.getDate()+offset);
+  input.value=_localDateText(date);
+  fetchOpLogs();
+}
+
+async function fetchOpLogs(){
+  const input=document.getElementById("logsDate");
+  const date=input.value||_currentBusinessDate();
+  input.value=date;
+  try{
+    const url=API.operationLogs+"?date="+encodeURIComponent(date)+"&limit=1000";
+    const response=await fetch(url,{headers:{"X-Records-Password":recordsSessionPassword}});
+    const json=await response.json();
+    if(!response.ok||json.code!==0)throw new Error(json.detail||"操作日志加载失败");
+    document.getElementById("logsRange").textContent="统计范围："+json.start_at+" 至 "+json.end_at+"（不含结束时间）";
+    renderOpLogs(json.data||[]);
+  }catch(e){
+    document.querySelector("#logsTable tbody").innerHTML='<tr><td colspan="4" class="empty-hint">日志加载失败：'+escapeHtml(e.message)+'</td></tr>';
+  }
+}
 
 
 
@@ -1758,11 +1793,35 @@ function renderOpLogs(logs){const tb=document.querySelector("#logsTable tbody");
 
 
 
+function initBillingHistory(){
+  const input=document.getElementById("historyDate");
+  if(!input.value)input.value=_currentBusinessDate();
+  fetchBillingHistory();
+}
+
+function setHistoryToday(){
+  document.getElementById("historyDate").value=_currentBusinessDate();
+  fetchBillingHistory();
+}
+
+function changeHistoryDate(offset){
+  const input=document.getElementById("historyDate");
+  const parts=(input.value||_currentBusinessDate()).split("-").map(Number);
+  const date=new Date(parts[0],parts[1]-1,parts[2]);
+  date.setDate(date.getDate()+offset);
+  input.value=_localDateText(date);
+  fetchBillingHistory();
+}
+
 async function fetchBillingHistory(){
+  const input=document.getElementById("historyDate");
+  const date=input.value||_currentBusinessDate();
+  input.value=date;
   try{
-    const response=await fetch(API.billingHistory),json=await response.json();
+    const response=await fetch(API.billingHistory+"?date="+encodeURIComponent(date)),json=await response.json();
     if(!response.ok||json.code!==0)throw new Error(json.detail||"结账记录加载失败");
     billingHistoryData=(json.data||[]).sort((a,b)=>_historyTimeValue(b.close_at)-_historyTimeValue(a.close_at)||b.id-a.id);
+    document.getElementById("historyRange").textContent="统计范围："+json.start_at+" 至 "+json.end_at+"（不含结束时间）";
     renderBillingHistory(billingHistoryData);
   }catch(e){
     document.querySelector("#historyTable tbody").innerHTML='<tr><td colspan="9" class="empty-hint">记录加载失败：'+escapeHtml(e.message)+'</td></tr>';

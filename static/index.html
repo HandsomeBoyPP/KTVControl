@@ -77,8 +77,8 @@
     <div class="section-header"><h2>收银台 · 当前开台账单</h2></div>
     <div class="table-wrap" style="margin-bottom:20px;">
       <table class="data-table" id="billingTable">
-        <thead><tr><th>房间</th><th>时长(min)</th><th>酒水费</th><th>实收金额</th><th>客户类型</th><th>操作</th></tr></thead>
-        <tbody><tr><td colspan="6" class="empty-hint">暂无开台账单</td></tr></tbody>
+        <thead><tr><th>房间</th><th>开台时间</th><th>时长(min)</th><th>酒水费</th><th>实收金额</th><th>客户类型</th><th>操作</th></tr></thead>
+        <tbody><tr><td colspan="7" class="empty-hint">暂无开台账单</td></tr></tbody>
       </table>
     </div>
     <div class="card" id="settleCard" style="display:none;">
@@ -159,12 +159,20 @@
         </table>
       </div>
     </div>
+
   </section>
 
   <section class="tab-panel" id="tab-history">
-    <div class="section-header">
-      <h2>结账记录</h2>
-      <div style="display:flex;gap:8px;">
+    <div class="section-header report-header">
+      <div>
+        <h2>结账记录</h2>
+        <p class="section-note" id="historyRange">营业日按早上 6 点切换</p>
+      </div>
+      <div class="report-date-controls">
+        <button class="btn btn-sm btn-secondary" onclick="changeHistoryDate(-1)">上一天</button>
+        <input type="date" id="historyDate" onchange="fetchBillingHistory()">
+        <button class="btn btn-sm btn-secondary" onclick="setHistoryToday()">今天</button>
+        <button class="btn btn-sm btn-secondary" onclick="changeHistoryDate(1)">下一天</button>
         <button class="btn btn-sm btn-accent admin-only" style="display:none;" onclick="showBillingHistoryModal()">+ 新增结账记录</button>
         <button class="btn btn-sm btn-secondary" onclick="fetchBillingHistory()">刷新</button>
       </div>
@@ -236,7 +244,19 @@
   </section>
 
   <section class="tab-panel" id="tab-logs">
-    <div class="section-header"><h2>操作日志</h2><button class="btn btn-sm btn-secondary" onclick="fetchOpLogs()">刷新</button></div>
+    <div class="section-header report-header">
+      <div>
+        <h2>操作日志</h2>
+        <p class="section-note" id="logsRange">营业日按早上 6 点切换</p>
+      </div>
+      <div class="report-date-controls">
+        <button class="btn btn-sm btn-secondary" onclick="changeLogsDate(-1)">上一天</button>
+        <input type="date" id="logsDate" onchange="fetchOpLogs()">
+        <button class="btn btn-sm btn-secondary" onclick="setLogsToday()">今天</button>
+        <button class="btn btn-sm btn-secondary" onclick="changeLogsDate(1)">下一天</button>
+        <button class="btn btn-sm btn-secondary" onclick="fetchOpLogs()">刷新</button>
+      </div>
+    </div>
     <div class="table-wrap">
       <table class="data-table" id="logsTable">
         <thead><tr><th>时间</th><th>操作</th><th>房间</th><th>详情</th></tr></thead>
@@ -744,7 +764,7 @@
     </div>
   </div>
 </div>
-<script src="/static/app.js?v=32"></script>
+<script src="/static/app.js?v=35"></script>
 
 
 
