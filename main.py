@@ -7,17 +7,17 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from database import init_db, get_db, log_operation, verify_admin_password
+from database import init_db, get_db, log_operation, verify_admin_password, verify_records_password
 from models import (
     AddDrinkRequest, BillingHistoryWriteRequest, BookingRequest, CreateInventoryRequest, CreateMemberRequest, CreateStaffRequest,
     CloseRequest, CreatePackageRequest, DeletePackageRequest, ExtendRequest, OpenRequest,
     ExpireMemberDrinkRequest, RechargeLogWriteRequest, RechargeRequest, ResetMemberPasswordRequest, RetrieveMemberDrinkRequest, SaveBillingDraftRequest, SettlementRequest,
     StoreMemberDrinkRequest, UpdateBillingRequest, UpdateInventoryRequest, UpdateMemberRequest, UpdatePackageRequest, UpdateStaffRequest,
-    VerifyAdminRequest, VerifyMemberRequest,
+    VerifyAdminRequest, VerifyMemberRequest, VerifyRecordsRequest,
 )
 from scheduler import (
     cancel_auto_close, execute_device_command, ktv_get, ktv_post, restore_all_schedules,
@@ -520,7 +520,9 @@ def _recharge_log_time(value: datetime) -> str:
 
 
 @app.get("/api/recharge-logs")
-async def list_recharge_logs():
+async def list_recharge_logs(x_records_password: str = Header(default="")):
+    if not verify_records_password(x_records_password):
+        raise HTTPException(403, "记录查看密码错误")
     conn = get_db()
     try:
         rows = conn.execute(
@@ -1526,10 +1528,6 @@ async def settle_billing(req: SettlementRequest):
         conn.commit()
 
         room_name = billing["room_no"]
-        cancel_auto_close(
-            billing["room_ip"] or "", room_name,
-            "账单已结算，房间保持开台，自动关台任务已取消",
-        )
         member_detail = ""
         if settlement_member_id is not None:
             member_detail = (
@@ -1555,6 +1553,98 @@ async def settle_billing(req: SettlementRequest):
     except Exception:
         conn.rollback()
         raise
+    finally:
+        conn.close()
+
+
+# ---- Business Report Routes ----
+
+@app.get("/api/reports/daily")
+async def get_daily_business_report(date: str = "", x_records_password: str = Header(default="")):
+    """Return one business day, which runs from 06:00 to 05:59 the next day."""
+    if not verify_records_password(x_records_password):
+        raise HTTPException(403, "记录查看密码错误")
+    now = datetime.now()
+    if date:
+        try:
+            business_date = datetime.strptime(date, "%Y-%m-%d")
+        except ValueError:
+            raise HTTPException(400, "日期格式应为 YYYY-MM-DD")
+    else:
+        business_date = now if now.hour >= 6 else now - timedelta(days=1)
+        business_date = business_date.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    start_at = business_date.replace(hour=6, minute=0, second=0, microsecond=0)
+    end_at = start_at + timedelta(days=1)
+    start_text = start_at.strftime("%Y-%m-%d %H:%M:%S")
+    end_text = end_at.strftime("%Y-%m-%d %H:%M:%S")
+
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            """SELECT b.id, b.room_no, b.package_id, b.room_fee, b.drinks_fee,
+                      b.total, b.payment_method, b.settlement_member_name,
+                      b.settlement_member_phone, b.notes, b.close_at,
+                      p.name AS package_name
+               FROM billing_records b
+               LEFT JOIN packages p ON p.id = b.package_id
+               WHERE b.status = 'closed'
+                 AND b.close_at >= ? AND b.close_at < ?
+               ORDER BY b.close_at DESC, b.id DESC""",
+            (start_text, end_text),
+        ).fetchall()
+        bills = [dict(row) for row in rows]
+
+        payment_totals = {}
+        business_total = 0.0
+        checkout_received_total = 0.0
+        member_balance_total = 0.0
+        for bill in bills:
+            amount = float(bill.get("total") or 0)
+            method = (bill.get("payment_method") or "未填写").strip() or "未填写"
+            business_total += amount
+            payment_totals[method] = payment_totals.get(method, 0.0) + amount
+            if method == "会员余额":
+                member_balance_total += amount
+            else:
+                checkout_received_total += amount
+
+        recharge_row = conn.execute(
+            """SELECT COALESCE(SUM(amount), 0) AS total
+               FROM recharge_logs
+               WHERE created_at >= ? AND created_at < ?""",
+            (start_text, end_text),
+        ).fetchone()
+        recharge_total = float(recharge_row["total"] or 0)
+
+        preferred_methods = ["现金", "微信", "支付宝", "美团", "会员余额"]
+        payment_breakdown = [
+            {"method": method, "amount": round(payment_totals.pop(method, 0.0), 2)}
+            for method in preferred_methods
+        ]
+        payment_breakdown.extend(
+            {"method": method, "amount": round(amount, 2)}
+            for method, amount in sorted(payment_totals.items())
+        )
+
+        return {
+            "code": 0,
+            "data": {
+                "business_date": start_at.strftime("%Y-%m-%d"),
+                "start_at": start_text,
+                "end_at": end_text,
+                "summary": {
+                    "business_total": round(business_total, 2),
+                    "checkout_received_total": round(checkout_received_total, 2),
+                    "recharge_total": round(recharge_total, 2),
+                    "actual_income_total": round(checkout_received_total + recharge_total, 2),
+                    "member_balance_total": round(member_balance_total, 2),
+                    "bill_count": len(bills),
+                },
+                "payment_breakdown": payment_breakdown,
+                "bills": bills,
+            },
+        }
     finally:
         conn.close()
 
@@ -1659,6 +1749,13 @@ async def delete_billing(billing_id: int, admin_password: str = ""):
 
 # ---- Admin Route ----
 
+@app.post("/api/records/verify")
+async def verify_records_access(req: VerifyRecordsRequest):
+    if verify_records_password(req.records_password):
+        return {"code": 0, "msg": "ok"}
+    raise HTTPException(403, "记录查看密码错误")
+
+
 @app.post("/api/admin/verify")
 async def verify_admin(req: VerifyAdminRequest):
     if verify_admin_password(req.admin_password):
@@ -1669,7 +1766,9 @@ async def verify_admin(req: VerifyAdminRequest):
 # ---- Operation Log Routes ----
 
 @app.get("/api/operation-logs")
-async def list_operation_logs(limit: int = 100):
+async def list_operation_logs(limit: int = 100, x_records_password: str = Header(default="")):
+    if not verify_records_password(x_records_password):
+        raise HTTPException(403, "记录查看密码错误")
     conn = get_db()
     try:
         rows = conn.execute("SELECT * FROM operation_logs ORDER BY id DESC LIMIT ?", (limit,)).fetchall()

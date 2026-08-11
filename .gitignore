@@ -11,3 +11,4 @@ venv/
 
 # 数据文件
 data/ktv.db
+data/config.json

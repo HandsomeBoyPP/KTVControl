@@ -10,7 +10,7 @@
 
 <title>KTV 前台控制</title>
 
-<link rel="stylesheet" href="/static/style.css?v=7">
+<link rel="stylesheet" href="/static/style.css?v=9">
 
 </head>
 
@@ -28,17 +28,16 @@
 
     <div class="sidebar-section-title">收银记账</div>
     <button class="tab-btn" data-tab="checkout"><span class="tab-icon">&#165;</span> 收银台</button>
-    <button class="tab-btn" data-tab="reports"><span class="tab-icon">&#9638;</span> 营业报表</button>
+    <button class="tab-btn records-access-only" data-tab="reports" style="display:none;"><span class="tab-icon">&#9638;</span> 营业报表</button>
     <button class="tab-btn" data-tab="history"><span class="tab-icon">&#9776;</span> 结账记录</button>
-    <button class="tab-btn" data-tab="recharges"><span class="tab-icon">&#165;</span> 充卡记录</button>
+    <button class="tab-btn records-access-only" data-tab="recharges" style="display:none;"><span class="tab-icon">&#165;</span> 充卡记录</button>
 
     <div class="sidebar-section-title">管理</div>
     <button class="tab-btn" data-tab="packages"><span class="tab-icon">&#9636;</span> 套餐管理</button>
     <button class="tab-btn" data-tab="inventory"><span class="tab-icon">&#9635;</span> 库存管理</button>
     <button class="tab-btn" data-tab="staff"><span class="tab-icon">&#9823;</span> 店内人员管理</button>
 
-    <div class="sidebar-section-title">系统</div>
-    <button class="tab-btn" data-tab="logs"><span class="tab-icon">&#9776;</span> 操作日志</button>
+    <button class="tab-btn records-access-only" data-tab="logs" style="display:none;"><span class="tab-icon">&#9776;</span> 操作日志</button>
   </div>
   <div class="sidebar-footer">
     <span class="clock" id="clock">--</span>
@@ -104,7 +103,7 @@
         <small id="settlePriceHint" style="display:block;color:var(--text-dim);margin-top:4px;">默认等于应收合计</small>
       </div>
       <div class="form-group"><label>支付方式</label>
-        <select id="settlePayment" onchange="onSettlePaymentChange()"><option value="现金">现金</option><option value="微信">微信</option><option value="支付宝">支付宝</option><option value="会员余额">会员余额</option></select>
+        <select id="settlePayment" onchange="onSettlePaymentChange()"><option value="现金">现金</option><option value="微信">微信</option><option value="支付宝">支付宝</option><option value="美团">美团</option><option value="会员余额">会员余额</option></select>
       </div>
       <div class="form-group"><label>备注</label><input type="text" id="settleNotes" maxlength="200" placeholder="修改实际价格时必填，至少10个字" oninput="updateSettlePriceHint()"></div>
       <div id="memberSettleInfo" style="display:none;">
@@ -121,13 +120,43 @@
   </section>
 
   <section class="tab-panel" id="tab-reports">
-    <div class="section-header"><h2>营业报表</h2></div>
-    <div class="placeholder-tab report-placeholder">
+    <div class="section-header report-header">
       <div>
-        <div class="placeholder-icon">&#9638;</div>
-        <h3>营业报表</h3>
-        <p>后续统一提供日报、周报、月报和年报。</p>
-        <div class="report-tags"><span>日报</span><span>周报</span><span>月报</span><span>年报</span></div>
+        <h2>营业日报</h2>
+        <p class="section-note" id="reportRange">营业日按早上 6 点切换</p>
+      </div>
+      <div class="report-date-controls">
+        <button class="btn btn-sm btn-secondary" onclick="changeReportDate(-1)">上一天</button>
+        <input type="date" id="reportDate" onchange="fetchDailyReport()">
+        <button class="btn btn-sm btn-secondary" onclick="setReportToday()">今天</button>
+        <button class="btn btn-sm btn-secondary" onclick="changeReportDate(1)">下一天</button>
+        <button class="btn btn-sm btn-accent" onclick="fetchDailyReport()">查询</button>
+      </div>
+    </div>
+
+    <div class="report-summary-grid">
+      <div class="report-summary-card primary"><span class="report-metric-label" tabindex="0" data-tip="当天真正收到的钱：结账实际收款 + 充卡金额，不包含会员余额消费。">当日实际入账</span><strong id="reportActualIncomeTotal">¥0.00</strong></div>
+      <div class="report-summary-card"><span class="report-metric-label" tabindex="0" data-tip="当天所有已结账账单的金额，包含会员余额消费。">营业额</span><strong id="reportBusinessTotal">¥0.00</strong></div>
+      <div class="report-summary-card"><span class="report-metric-label" tabindex="0" data-tip="当天结账时通过现金、微信、支付宝、美团或其他方式实际收取的金额，不含会员余额。">结账实际收款</span><strong id="reportCheckoutReceivedTotal">¥0.00</strong></div>
+      <div class="report-summary-card"><span class="report-metric-label" tabindex="0" data-tip="当天会员充值实际支付的金额。">充卡金额</span><strong id="reportRechargeTotal">¥0.00</strong></div>
+      <div class="report-summary-card"><span class="report-metric-label" tabindex="0" data-tip="当天使用会员账户余额结账的消费金额，只计入营业额，不重复计入当日实际入账。">会员余额消费</span><strong id="reportMemberPayTotal">¥0.00</strong></div>
+      <div class="report-summary-card"><span class="report-metric-label" tabindex="0" data-tip="当天已经完成结账的账单数量。">结账单数</span><strong id="reportBillCount">0</strong></div>
+    </div>
+
+    <div class="report-section">
+      <h3>收款对账</h3>
+      <div class="payment-summary" id="reportPaymentSummary">
+        <span class="empty-hint">正在加载...</span>
+      </div>
+    </div>
+
+    <div class="report-section">
+      <div class="section-header"><h3>结账明细</h3><span class="section-note" id="reportBillHint"></span></div>
+      <div class="table-wrap">
+        <table class="data-table" id="dailyReportTable">
+          <thead><tr><th>结账时间</th><th>房间</th><th>套餐</th><th>套餐费</th><th>酒水费</th><th>实收金额</th><th>支付方式</th><th>结账会员</th><th>备注</th></tr></thead>
+          <tbody><tr><td colspan="9" class="empty-hint">正在加载...</td></tr></tbody>
+        </table>
       </div>
     </div>
   </section>
@@ -670,7 +699,7 @@
   </div>
 </div>
 
-<datalist id="paymentMethodOptions"><option value="现金"><option value="微信"><option value="支付宝"><option value="会员余额"></datalist>
+<datalist id="paymentMethodOptions"><option value="现金"><option value="微信"><option value="支付宝"><option value="美团"><option value="会员余额"></datalist>
 
 <div class="modal-overlay" id="rechargeLogModal">
   <div class="modal">
@@ -693,6 +722,17 @@
   </div>
 </div>
 
+<div class="modal-overlay" id="recordsAccessModal">
+  <div class="modal">
+    <h3>验证记录查看密码</h3>
+    <p style="font-size:13px;color:var(--text-dim);margin-bottom:14px;">验证通过后，本次页面会话中显示营业报表、充卡记录和操作日志。</p>
+    <div class="form-group"><label>记录查看密码</label><input type="password" id="recordsAccessPassword" autocomplete="current-password"></div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" onclick="closeModal('recordsAccessModal')">取消</button>
+      <button class="btn btn-primary" id="confirmRecordsAccess">验证并显示</button>
+    </div>
+  </div>
+</div>
 <div class="modal-overlay" id="adminToolsModal">
   <div class="modal">
     <h3>&#39564;&#35777;&#31649;&#29702;&#23494;&#30721;</h3>
@@ -704,7 +744,7 @@
     </div>
   </div>
 </div>
-<script src="/static/app.js?v=28"></script>
+<script src="/static/app.js?v=32"></script>
 
 
 

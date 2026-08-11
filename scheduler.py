@@ -20,19 +20,6 @@ class StaleAutoCloseCommand(RuntimeError):
     """Raised when an old auto-close command no longer owns the room timer."""
 
 
-def _room_has_open_billing(room_name: str, room_ip: str) -> bool:
-    conn = get_db()
-    try:
-        row = conn.execute(
-            """SELECT id FROM billing_records
-               WHERE room_no = ? AND room_ip = ? AND status = 'open'
-               ORDER BY id DESC LIMIT 1""",
-            (room_name, room_ip),
-        ).fetchone()
-        return row is not None
-    finally:
-        conn.close()
-
 
 def _auto_close_command_is_current(command: dict) -> bool:
     if command.get("action") != "auto_close":
@@ -54,7 +41,6 @@ def _auto_close_command_is_current(command: dict) -> bool:
     return bool(
         room_ip
         and current.get("room_ip") == room_ip
-        and _room_has_open_billing(room_name, room_ip)
     )
 
 
@@ -265,15 +251,10 @@ async def do_auto_close(room_ip: str, room_name: str, close_at_iso: str):
         schedule_matches = state_mgr.auto_close_matches(
             room_name, room_ip, close_at_iso
         )
-        billing_is_open = _room_has_open_billing(room_name, room_ip)
-        if not schedule_matches or not billing_is_open:
-            if schedule_matches:
-                state_mgr.clear_auto_close_if_current(
-                    room_name, room_ip, close_at_iso
-                )
+        if not schedule_matches:
             logger.info(
                 f"[AutoClose skipped stale] {room_name} -> {close_at_iso} "
-                f"schedule_matches={schedule_matches} billing_open={billing_is_open}"
+                f"schedule_matches={schedule_matches}"
             )
             current_task = asyncio.current_task()
             if state_mgr.auto_close_tasks.get(room_name) is current_task:

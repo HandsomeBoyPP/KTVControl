@@ -56,6 +56,8 @@ const API = {
 
   operationLogs: "/api/operation-logs", adminVerify: "/api/admin/verify",
 
+  dailyReport: "/api/reports/daily", recordsVerify: "/api/records/verify",
+
 
 
 };
@@ -83,12 +85,36 @@ let activeTab="rooms";
 let pollingTimers=[], countdownTimers={};
 
 let adminToolsVisible=false, adminSessionPassword="";
+let recordsVisible=false, recordsSessionPassword="";
 let editingRechargeLogId=null, editingBillingHistoryId=null;
 
 function applyAdminToolsVisibility(){
   document.querySelectorAll(".del-col,.del-btn,.admin-only").forEach(el=>{el.style.display=adminToolsVisible?"":"none";});
 }
 
+
+function applyRecordsVisibility(){
+  document.querySelectorAll(".records-access-only").forEach(button=>{
+    button.style.display=recordsVisible?"":"none";
+  });
+}
+
+async function confirmRecordsAccess(){
+  const input=document.getElementById("recordsAccessPassword");
+  const password=input.value;
+  if(!password){alert("请输入记录查看密码");input.focus();return;}
+  try{
+    const response=await fetch(API.recordsVerify,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({records_password:password})});
+    const json=await response.json();
+    if(!response.ok||json.code!==0){alert(json.detail||"记录查看密码错误");input.select();return;}
+    recordsVisible=true;
+    recordsSessionPassword=password;
+    applyRecordsVisibility();
+    closeModal("recordsAccessModal");
+    input.value="";
+    switchTab("reports");
+  }catch(e){alert("验证失败: "+e);}
+}
 
 async function confirmAdminToolsAccess(){
   const input=document.getElementById("adminToolsPassword");
@@ -178,6 +204,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
   document.getElementById("confirmAdminTools")?.addEventListener("click", confirmAdminToolsAccess);
   document.getElementById("adminToolsPassword")?.addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDefault();confirmAdminToolsAccess();}});
+  document.getElementById("confirmRecordsAccess")?.addEventListener("click", confirmRecordsAccess);
+  document.getElementById("recordsAccessPassword")?.addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDefault();confirmRecordsAccess();}});
 
 
 
@@ -225,6 +253,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
 
 
+  applyRecordsVisibility();
   switchTab("rooms");
 
 
@@ -244,9 +273,24 @@ document.addEventListener("keydown",function(e){
   setTimeout(()=>input.focus(),0);
 });
 
-
+document.addEventListener("keydown",function(e){
+  if(!e.ctrlKey||e.altKey||e.repeat||!["Backslash","IntlBackslash"].includes(e.code))return;
+  e.preventDefault();
+  if(recordsVisible){
+    recordsVisible=false;
+    recordsSessionPassword="";
+    applyRecordsVisibility();
+    if(["reports","recharges","logs"].includes(activeTab))switchTab("rooms");
+    return;
+  }
+  const input=document.getElementById("recordsAccessPassword");
+  input.value="";
+  showModal("recordsAccessModal");
+  setTimeout(()=>input.focus(),0);
+});
 
 });
+
 
 
 
@@ -293,6 +337,8 @@ function switchTab(tab){
     fetchMembers();addPolling(fetchMembers,10000);
   }else if(tab==="checkout"){
     fetchActiveBilling();fetchInventory();fetchPackages();addPolling(fetchActiveBilling,10000);
+  }else if(tab==="reports"){
+    initDailyReport();
   }else if(tab==="packages"){
     fetchPackages();fetchInventory();
   }else if(tab==="inventory"){
@@ -310,6 +356,86 @@ function switchTab(tab){
 
 
 // ================================================================
+// Daily Business Report
+// ================================================================
+
+function _localDateText(date){
+  const year=date.getFullYear();
+  const month=String(date.getMonth()+1).padStart(2,"0");
+  const day=String(date.getDate()).padStart(2,"0");
+  return year+"-"+month+"-"+day;
+}
+
+function _currentBusinessDate(){
+  const now=new Date();
+  if(now.getHours()<6)now.setDate(now.getDate()-1);
+  return _localDateText(now);
+}
+
+function initDailyReport(){
+  const input=document.getElementById("reportDate");
+  if(!input.value)input.value=_currentBusinessDate();
+  fetchDailyReport();
+}
+
+function setReportToday(){
+  document.getElementById("reportDate").value=_currentBusinessDate();
+  fetchDailyReport();
+}
+
+function changeReportDate(offset){
+  const input=document.getElementById("reportDate");
+  const parts=(input.value||_currentBusinessDate()).split("-").map(Number);
+  const date=new Date(parts[0],parts[1]-1,parts[2]);
+  date.setDate(date.getDate()+offset);
+  input.value=_localDateText(date);
+  fetchDailyReport();
+}
+
+function _reportMoney(value){return "¥"+Number(value||0).toFixed(2);}
+
+async function fetchDailyReport(){
+  const date=document.getElementById("reportDate").value||_currentBusinessDate();
+  document.getElementById("reportDate").value=date;
+  const tbody=document.querySelector("#dailyReportTable tbody");
+  tbody.innerHTML='<tr><td colspan="9" class="empty-hint">正在加载...</td></tr>';
+  try{
+    const response=await fetch(API.dailyReport+"?date="+encodeURIComponent(date),{headers:{"X-Records-Password":recordsSessionPassword}});
+    const json=await response.json();
+    if(!response.ok||json.code!==0)throw new Error(json.detail||"报表加载失败");
+    renderDailyReport(json.data);
+  }catch(e){
+    tbody.innerHTML='<tr><td colspan="9" class="empty-hint">报表加载失败：'+escapeHtml(e.message)+'</td></tr>';
+  }
+}
+
+function renderDailyReport(report){
+  const summary=report.summary||{};
+  document.getElementById("reportActualIncomeTotal").textContent=_reportMoney(summary.actual_income_total);
+  document.getElementById("reportBusinessTotal").textContent=_reportMoney(summary.business_total);
+  document.getElementById("reportCheckoutReceivedTotal").textContent=_reportMoney(summary.checkout_received_total);
+  document.getElementById("reportRechargeTotal").textContent=_reportMoney(summary.recharge_total);
+  document.getElementById("reportMemberPayTotal").textContent=_reportMoney(summary.member_balance_total);
+  document.getElementById("reportBillCount").textContent=Number(summary.bill_count||0)+" 单";
+  document.getElementById("reportRange").textContent="统计范围："+report.start_at+" 至 "+report.end_at+"（不含结束时间）";
+
+  const payments=report.payment_breakdown||[];
+  document.getElementById("reportPaymentSummary").innerHTML=payments.map(item=>
+    '<div class="payment-summary-item"><span>'+escapeHtml(item.method)+'</span><strong>'+_reportMoney(item.amount)+'</strong></div>'
+  ).join("");
+
+  const bills=report.bills||[];
+  document.getElementById("reportBillHint").textContent="共 "+bills.length+" 条";
+  const tbody=document.querySelector("#dailyReportTable tbody");
+  if(!bills.length){tbody.innerHTML='<tr><td colspan="9" class="empty-hint">该营业日暂无结账记录</td></tr>';return;}
+  tbody.innerHTML=bills.map(bill=>{
+    const member=bill.settlement_member_name
+      ? escapeHtml(bill.settlement_member_name)+'<div class="cell-note">'+escapeHtml(bill.settlement_member_phone||"")+'</div>'
+      : "-";
+    const time=bill.close_at?String(bill.close_at).replace("T"," ").substring(0,19):"-";
+    return '<tr><td class="cell-time">'+time+'</td><td>'+escapeHtml(bill.room_no||"-")+'</td><td>'+escapeHtml(bill.package_name||"-")+'</td><td>'+_reportMoney(bill.room_fee)+'</td><td>'+_reportMoney(bill.drinks_fee)+'</td><td class="report-total-cell">'+_reportMoney(bill.total)+'</td><td>'+escapeHtml(bill.payment_method||"-")+'</td><td>'+member+'</td><td>'+escapeHtml(bill.notes||"-")+'</td></tr>';
+  }).join("");
+}
 
 // Room Management
 
@@ -1604,7 +1730,7 @@ async function confirmSettle(){
 
 
 
-async function fetchOpLogs(){try{const r=await fetch(API.operationLogs+"?limit=100");const j=await r.json();if(j.code===0)renderOpLogs(j.data);}catch(e){}}
+async function fetchOpLogs(){try{const r=await fetch(API.operationLogs+"?limit=100",{headers:{"X-Records-Password":recordsSessionPassword}});const j=await r.json();if(j.code===0)renderOpLogs(j.data);}catch(e){}}
 
 
 
@@ -1646,7 +1772,7 @@ async function fetchBillingHistory(){
 
 async function fetchRechargeLogs(){
   try{
-    const response=await fetch(API.rechargeLogs),json=await response.json();
+    const response=await fetch(API.rechargeLogs,{headers:{"X-Records-Password":recordsSessionPassword}}),json=await response.json();
     if(!response.ok||json.code!==0)throw new Error(json.detail||"充卡记录加载失败");
     rechargeLogsData=(json.data||[]).sort((a,b)=>_historyTimeValue(b.created_at)-_historyTimeValue(a.created_at)||b.id-a.id);
     renderRechargeLogs(rechargeLogsData);

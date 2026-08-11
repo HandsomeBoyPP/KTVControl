@@ -10,26 +10,51 @@ logger = logging.getLogger("ktv")
 DATA_DIR = Path(__file__).parent / "data"
 DB_FILE = DATA_DIR / "ktv.db"
 CONFIG_FILE = DATA_DIR / "config.json"
+CONFIG_EXAMPLE_FILE = DATA_DIR / "config.example.json"
 
 # ---- Config ----
+def _load_config_defaults() -> dict:
+    if CONFIG_EXAMPLE_FILE.exists():
+        try:
+            return json.loads(CONFIG_EXAMPLE_FILE.read_text(encoding="utf-8"))
+        except Exception as e:
+            logger.error(f"Failed to load example config: {e}")
+    return {"admin_password": "", "records_password": ""}
+
+
 def load_config() -> dict:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
+    defaults = _load_config_defaults()
     if CONFIG_FILE.exists():
         try:
-            return json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+            cfg = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+            changed = False
+            for key, value in defaults.items():
+                if key not in cfg:
+                    cfg[key] = value
+                    changed = True
+            if changed:
+                save_config(cfg)
+            return cfg
         except Exception as e:
             logger.error(f"Failed to load config: {e}")
-    defaults = {"admin_password": "admin123"}
     save_config(defaults)
     return defaults
+
 
 def save_config(cfg: dict):
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     CONFIG_FILE.write_text(json.dumps(cfg, indent=2, ensure_ascii=False), encoding="utf-8")
 
+
 def verify_admin_password(password: str) -> bool:
     cfg = load_config()
-    return cfg.get("admin_password", "admin123") == password
+    return bool(password) and cfg.get("admin_password") == password
+
+
+def verify_records_password(password: str) -> bool:
+    cfg = load_config()
+    return bool(password) and cfg.get("records_password") == password
 
 # ---- Database Init & Migration ----
 def init_db():
