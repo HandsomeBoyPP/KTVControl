@@ -71,6 +71,7 @@ class ResetMemberPasswordRequest(RequestModel):
 
 class RechargeRequest(RequestModel):
     amount: float = Field(gt=0)
+    gift_amount: float = Field(default=0, ge=0)
     payment_method: Literal["现金", "微信", "支付宝"] = "现金"
     notes: str | None = Field(default=None, max_length=200)
 
@@ -80,6 +81,7 @@ class RechargeLogWriteRequest(RequestModel):
     member_name: str = Field(min_length=1, max_length=64)
     member_phone: str = Field(min_length=3, max_length=32)
     amount: float = Field(gt=0)
+    gift_amount: float = Field(default=0, ge=0)
     balance_after: float = Field(ge=0)
     payment_method: str = Field(min_length=1, max_length=32)
     detail: str = Field(min_length=1, max_length=200)
@@ -234,8 +236,15 @@ class BillingHistoryWriteRequest(RequestModel):
     settlement_member_name: str | None = Field(default=None, max_length=64)
     settlement_member_phone: str | None = Field(default=None, max_length=32)
     notes: str | None = Field(default=None, max_length=200)
+    open_at: datetime | None = None
     close_at: datetime
     admin_password: str
+
+    @model_validator(mode="after")
+    def validate_billing_times(self) -> Self:
+        if self.open_at is not None and self.open_at > self.close_at:
+            raise ValueError("开台时间不能晚于结账时间")
+        return self
 
 
 class VerifyMemberRequest(RequestModel):

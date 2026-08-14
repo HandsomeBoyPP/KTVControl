@@ -56,7 +56,7 @@ const API = {
 
   operationLogs: "/api/operation-logs", adminVerify: "/api/admin/verify",
 
-  dailyReport: "/api/reports/daily", recordsVerify: "/api/records/verify",
+  dailyReport: "/api/reports/daily", monthlyReport: "/api/reports/monthly", recordsVerify: "/api/records/verify",
 
 
 
@@ -87,6 +87,7 @@ let pollingTimers=[], countdownTimers={};
 let adminToolsVisible=false, adminSessionPassword="";
 let recordsVisible=false, recordsSessionPassword="";
 let editingRechargeLogId=null, editingBillingHistoryId=null;
+let currentReportView="daily";
 
 function applyAdminToolsVisibility(){
   document.querySelectorAll(".del-col,.del-btn,.admin-only").forEach(el=>{el.style.display=adminToolsVisible?"":"none";});
@@ -375,7 +376,23 @@ function _currentBusinessDate(){
 function initDailyReport(){
   const input=document.getElementById("reportDate");
   if(!input.value)input.value=_currentBusinessDate();
-  fetchDailyReport();
+  const month=document.getElementById("reportMonth");
+  if(!month.value)month.value=input.value.substring(0,7);
+  switchReportView(currentReportView);
+}
+
+function switchReportView(view){
+  currentReportView=view==="monthly"?"monthly":"daily";
+  const daily=currentReportView==="daily";
+  document.getElementById("dailyReportPanel").style.display=daily?"":"none";
+  document.getElementById("monthlyReportPanel").style.display=daily?"none":"";
+  const dailyTab=document.getElementById("dailyReportTab");
+  const monthlyTab=document.getElementById("monthlyReportTab");
+  dailyTab.classList.toggle("active",daily);
+  monthlyTab.classList.toggle("active",!daily);
+  dailyTab.setAttribute("aria-selected",daily?"true":"false");
+  monthlyTab.setAttribute("aria-selected",daily?"false":"true");
+  if(daily)fetchDailyReport();else fetchMonthlyReport();
 }
 
 function setReportToday(){
@@ -398,14 +415,14 @@ async function fetchDailyReport(){
   const date=document.getElementById("reportDate").value||_currentBusinessDate();
   document.getElementById("reportDate").value=date;
   const tbody=document.querySelector("#dailyReportTable tbody");
-  tbody.innerHTML='<tr><td colspan="9" class="empty-hint">正在加载...</td></tr>';
+  tbody.innerHTML='<tr><td colspan="10" class="empty-hint">正在加载...</td></tr>';
   try{
     const response=await fetch(API.dailyReport+"?date="+encodeURIComponent(date),{headers:{"X-Records-Password":recordsSessionPassword}});
     const json=await response.json();
     if(!response.ok||json.code!==0)throw new Error(json.detail||"报表加载失败");
     renderDailyReport(json.data);
   }catch(e){
-    tbody.innerHTML='<tr><td colspan="9" class="empty-hint">报表加载失败：'+escapeHtml(e.message)+'</td></tr>';
+    tbody.innerHTML='<tr><td colspan="10" class="empty-hint">报表加载失败：'+escapeHtml(e.message)+'</td></tr>';
   }
 }
 
@@ -427,16 +444,81 @@ function renderDailyReport(report){
   const bills=report.bills||[];
   document.getElementById("reportBillHint").textContent="共 "+bills.length+" 条";
   const tbody=document.querySelector("#dailyReportTable tbody");
-  if(!bills.length){tbody.innerHTML='<tr><td colspan="9" class="empty-hint">该营业日暂无结账记录</td></tr>';return;}
+  if(!bills.length){tbody.innerHTML='<tr><td colspan="10" class="empty-hint">该营业日暂无结账记录</td></tr>';return;}
   tbody.innerHTML=bills.map(bill=>{
     const member=bill.settlement_member_name
       ? escapeHtml(bill.settlement_member_name)+'<div class="cell-note">'+escapeHtml(bill.settlement_member_phone||"")+'</div>'
       : "-";
-    const time=bill.close_at?String(bill.close_at).replace("T"," ").substring(0,19):"-";
-    return '<tr><td class="cell-time">'+time+'</td><td>'+escapeHtml(bill.room_no||"-")+'</td><td>'+escapeHtml(bill.package_name||"-")+'</td><td>'+_reportMoney(bill.room_fee)+'</td><td>'+_reportMoney(bill.drinks_fee)+'</td><td class="report-total-cell">'+_reportMoney(bill.total)+'</td><td>'+escapeHtml(bill.payment_method||"-")+'</td><td>'+member+'</td><td>'+escapeHtml(bill.notes||"-")+'</td></tr>';
+    const openTime=bill.open_at?String(bill.open_at).replace("T"," ").substring(0,19):(bill.close_at?String(bill.close_at).replace("T"," ").substring(0,19):"-");
+    const closeTime=bill.close_at?String(bill.close_at).replace("T"," ").substring(0,19):"-";
+    return '<tr><td class="cell-time">'+openTime+'</td><td class="cell-time">'+closeTime+'</td><td>'+escapeHtml(bill.room_no||"-")+'</td><td>'+escapeHtml(bill.package_name||"-")+'</td><td>'+_reportMoney(bill.room_fee)+'</td><td>'+_reportMoney(bill.drinks_fee)+'</td><td class="report-total-cell">'+_reportMoney(bill.total)+'</td><td>'+escapeHtml(bill.payment_method||"-")+'</td><td>'+member+'</td><td>'+escapeHtml(bill.notes||"-")+'</td></tr>';
   }).join("");
 }
 
+function setReportCurrentMonth(){
+  document.getElementById("reportMonth").value=_currentBusinessDate().substring(0,7);
+  fetchMonthlyReport();
+}
+
+function changeReportMonth(offset){
+  const input=document.getElementById("reportMonth");
+  const parts=(input.value||_currentBusinessDate().substring(0,7)).split("-").map(Number);
+  const date=new Date(parts[0],parts[1]-1+offset,1);
+  input.value=String(date.getFullYear())+"-"+String(date.getMonth()+1).padStart(2,"0");
+  fetchMonthlyReport();
+}
+
+async function fetchMonthlyReport(){
+  const input=document.getElementById("reportMonth");
+  const month=input.value||_currentBusinessDate().substring(0,7);
+  input.value=month;
+  const tbody=document.querySelector("#monthlyReportTable tbody");
+  tbody.innerHTML='<tr><td colspan="10" class="empty-hint">正在加载...</td></tr>';
+  try{
+    const response=await fetch(API.monthlyReport+"?month="+encodeURIComponent(month),{headers:{"X-Records-Password":recordsSessionPassword}});
+    const json=await response.json();
+    if(!response.ok||json.code!==0)throw new Error(json.detail||"月报加载失败");
+    renderMonthlyReport(json.data);
+  }catch(e){
+    tbody.innerHTML='<tr><td colspan="10" class="empty-hint">月报加载失败：'+escapeHtml(e.message)+'</td></tr>';
+  }
+}
+
+function renderMonthlyReport(report){
+  const summary=report.summary||{};
+  document.getElementById("monthlyActualIncome").textContent=_reportMoney(summary.actual_income_total);
+  document.getElementById("monthlyMeituan").textContent=_reportMoney(summary["美团"]);
+  document.getElementById("monthlyWechat").textContent=_reportMoney(summary["微信"]);
+  document.getElementById("monthlyAlipay").textContent=_reportMoney(summary["支付宝"]);
+  document.getElementById("monthlyCash").textContent=_reportMoney(summary["现金"]);
+  document.getElementById("monthlyOther").textContent=_reportMoney(summary["其他"]);
+  document.getElementById("monthlyRecharge").textContent=_reportMoney(summary.recharge_total);
+  document.getElementById("monthlyMemberBalance").textContent=_reportMoney(summary.member_balance_total);
+  document.getElementById("monthlyBillCount").textContent=Number(summary.bill_count||0)+" 单";
+  document.getElementById("monthlyReportRange").textContent="统计范围："+report.start_at+" 至 "+report.end_at+"（不含结束时间）";
+
+  const days=report.days||[];
+  const tbody=document.querySelector("#monthlyReportTable tbody");
+  if(!days.length){tbody.innerHTML='<tr><td colspan="10" class="empty-hint">该月暂无数据</td></tr>';return;}
+  tbody.innerHTML=days.map(day=>
+    '<tr class="monthly-day-row" data-report-date="'+escapeHtml(day.business_date)+'" title="查看当日营业日报">'+
+    '<td>'+escapeHtml(day.business_date)+'</td>'+
+    '<td class="report-total-cell">'+_reportMoney(day.actual_income_total)+'</td>'+
+    '<td>'+_reportMoney(day["美团"])+'</td><td>'+_reportMoney(day["微信"])+'</td>'+
+    '<td>'+_reportMoney(day["支付宝"])+'</td><td>'+_reportMoney(day["现金"])+'</td>'+
+    '<td>'+_reportMoney(day["其他"])+'</td><td>'+_reportMoney(day.recharge_total)+'</td>'+
+    '<td>'+_reportMoney(day.member_balance_total)+'</td><td>'+Number(day.bill_count||0)+' 单</td></tr>'
+  ).join("");
+  tbody.querySelectorAll(".monthly-day-row").forEach(row=>{
+    row.addEventListener("click",()=>openDailyReportFromMonth(row.dataset.reportDate));
+  });
+}
+
+function openDailyReportFromMonth(date){
+  document.getElementById("reportDate").value=date;
+  switchReportView("daily");
+  document.getElementById("tab-reports").scrollIntoView({behavior:"smooth",block:"start"});
+}
 // Room Management
 
 
@@ -1094,11 +1176,46 @@ async function confirmEditMember(){
 
 
 
-function showRechargeModal(memberId){const member=membersData.find(item=>item.id===memberId);if(!member)return;currentMember=member;document.getElementById("rechargeMemberLabel").textContent=member.name;document.getElementById("rechargeAmount").value="";document.getElementById("rechargeMethod").value="现金";document.getElementById("rechargeNotes").value="";showModal("rechargeModal");}
+function showRechargeModal(memberId){
+  const member=membersData.find(item=>item.id===memberId);if(!member)return;
+  currentMember=member;
+  document.getElementById("rechargeMemberLabel").textContent=member.name;
+  document.getElementById("rechargeAmount").value="";
+  document.getElementById("rechargeGiftAmount").value="0";
+  document.getElementById("rechargeMethod").value="现金";
+  document.getElementById("rechargeNotes").value="";
+  updateRechargePreview();
+  showModal("rechargeModal");
+}
 
+function updateRechargePreview(){
+  const amount=Math.max(0,parseFloat(document.getElementById("rechargeAmount")?.value)||0);
+  const gift=Math.max(0,parseFloat(document.getElementById("rechargeGiftAmount")?.value)||0);
+  const currentBalance=Number(currentMember?.balance||0);
+  document.getElementById("rechargeCreditTotal").textContent=_reportMoney(amount+gift);
+  document.getElementById("rechargeBalanceAfter").textContent=_reportMoney(currentBalance+amount+gift);
+}
 
-
-async function confirmRecharge(){if(!currentMember)return;const amount=parseFloat(document.getElementById("rechargeAmount").value),method=document.getElementById("rechargeMethod").value,notes=document.getElementById("rechargeNotes").value.trim()||null;if(!amount||amount<=0){alert("请输入有效金额");return;}try{const r=await fetch(API.recharge+"/"+currentMember.id+"/recharge",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({amount,payment_method:method,notes})});const j=await r.json();if(j.code===0){closeModal("rechargeModal");fetchMembers();if(activeTab==="recharges")fetchRechargeLogs();}else alert("充值失败："+(j.detail||j.msg||"unknown"));}catch(e){alert("请求失败: "+e);}}
+async function confirmRecharge(){
+  if(!currentMember)return;
+  const amount=parseFloat(document.getElementById("rechargeAmount").value);
+  const giftAmount=parseFloat(document.getElementById("rechargeGiftAmount").value)||0;
+  const method=document.getElementById("rechargeMethod").value;
+  const notes=document.getElementById("rechargeNotes").value.trim()||null;
+  if(!amount||amount<=0){alert("请输入有效的充卡金额");return;}
+  if(giftAmount<0){alert("赠送金额不能小于0");return;}
+  try{
+    const r=await fetch(API.recharge+"/"+currentMember.id+"/recharge",{
+      method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({amount,gift_amount:giftAmount,payment_method:method,notes})
+    });
+    const j=await r.json();
+    if(j.code===0){
+      closeModal("rechargeModal");fetchMembers();
+      if(activeTab==="recharges")fetchRechargeLogs();
+    }else alert("充值失败："+(j.detail||j.msg||"unknown"));
+  }catch(e){alert("请求失败: "+e);}
+}
 
 
 
@@ -1820,11 +1937,11 @@ async function fetchBillingHistory(){
   try{
     const response=await fetch(API.billingHistory+"?date="+encodeURIComponent(date)),json=await response.json();
     if(!response.ok||json.code!==0)throw new Error(json.detail||"结账记录加载失败");
-    billingHistoryData=(json.data||[]).sort((a,b)=>_historyTimeValue(b.close_at)-_historyTimeValue(a.close_at)||b.id-a.id);
+    billingHistoryData=(json.data||[]).sort((a,b)=>_historyTimeValue(b.open_at||b.close_at)-_historyTimeValue(a.open_at||a.close_at)||b.id-a.id);
     document.getElementById("historyRange").textContent="统计范围："+json.start_at+" 至 "+json.end_at+"（不含结束时间）";
     renderBillingHistory(billingHistoryData);
   }catch(e){
-    document.querySelector("#historyTable tbody").innerHTML='<tr><td colspan="9" class="empty-hint">记录加载失败：'+escapeHtml(e.message)+'</td></tr>';
+    document.querySelector("#historyTable tbody").innerHTML='<tr><td colspan="10" class="empty-hint">记录加载失败：'+escapeHtml(e.message)+'</td></tr>';
   }
 }
 
@@ -1836,7 +1953,7 @@ async function fetchRechargeLogs(){
     rechargeLogsData=(json.data||[]).sort((a,b)=>_historyTimeValue(b.created_at)-_historyTimeValue(a.created_at)||b.id-a.id);
     renderRechargeLogs(rechargeLogsData);
   }catch(e){
-    document.querySelector("#rechargeLogsTable tbody").innerHTML='<tr><td colspan="8" class="empty-hint">记录加载失败：'+escapeHtml(e.message)+'</td></tr>';
+    document.querySelector("#rechargeLogsTable tbody").innerHTML='<tr><td colspan="9" class="empty-hint">记录加载失败：'+escapeHtml(e.message)+'</td></tr>';
   }
 }
 
@@ -1850,12 +1967,13 @@ function _historyTimeValue(value){
 
 function renderBillingHistory(bills){
   const tb=document.querySelector("#historyTable tbody");
-  if(!bills.length){tb.innerHTML='<tr><td colspan="9" class="empty-hint">暂无记录</td></tr>';return;}
+  if(!bills.length){tb.innerHTML='<tr><td colspan="10" class="empty-hint">暂无记录</td></tr>';return;}
   tb.innerHTML=bills.map(b=>{
-    const t=b.close_at?String(b.close_at).replace("T"," ").substring(0,19):"-";
+    const openTime=b.open_at?String(b.open_at).replace("T"," ").substring(0,19):(b.close_at?String(b.close_at).replace("T"," ").substring(0,19):"-");
+    const closeTime=b.close_at?String(b.close_at).replace("T"," ").substring(0,19):"-";
     const member=b.settlement_member_name?escapeHtml(b.settlement_member_name)+'<div style="font-size:11px;color:var(--text-dim);">'+escapeHtml(b.settlement_member_phone||"")+'</div>':"-";
     const actions='<button class="btn btn-xs btn-outline admin-only" style="display:none;" onclick="showBillingHistoryModal('+b.id+')">修改</button> <button class="btn btn-xs btn-danger admin-only" style="display:none;" onclick="deleteBilling('+b.id+')">删除</button>';
-    return '<tr><td>'+escapeHtml(b.room_no||"-")+'</td><td>'+Number(b.room_fee||0).toFixed(2)+'</td><td>'+Number(b.drinks_fee||0).toFixed(2)+'</td><td>'+Number(b.total||0).toFixed(2)+'</td><td>'+escapeHtml(b.payment_method||"-")+'</td><td>'+member+'</td><td>'+escapeHtml(b.notes||"-")+'</td><td style="font-size:12px;color:var(--text-dim);">'+t+'</td><td class="del-col" style="display:none;">'+actions+'</td></tr>';
+    return '<tr><td>'+escapeHtml(b.room_no||"-")+'</td><td class="cell-time">'+openTime+'</td><td class="cell-time">'+closeTime+'</td><td>'+Number(b.room_fee||0).toFixed(2)+'</td><td>'+Number(b.drinks_fee||0).toFixed(2)+'</td><td>'+Number(b.total||0).toFixed(2)+'</td><td>'+escapeHtml(b.payment_method||"-")+'</td><td>'+member+'</td><td>'+escapeHtml(b.notes||"-")+'</td><td class="del-col" style="display:none;">'+actions+'</td></tr>';
   }).join("");
   applyAdminToolsVisibility();
 }
@@ -1863,13 +1981,13 @@ function renderBillingHistory(bills){
 
 function renderRechargeLogs(logs){
   const tb=document.querySelector("#rechargeLogsTable tbody");
-  if(!logs.length){tb.innerHTML='<tr><td colspan="8" class="empty-hint">暂无记录</td></tr>';return;}
+  if(!logs.length){tb.innerHTML='<tr><td colspan="9" class="empty-hint">暂无记录</td></tr>';return;}
   tb.innerHTML=logs.map(r=>{
     const t=r.created_at?String(r.created_at).replace("T"," ").substring(0,19):"-";
     const member=escapeHtml(r.member_name||"-")+'<div style="font-size:11px;color:var(--text-dim);">'+escapeHtml(r.member_phone||"-")+'</div>';
     const balance=r.balance_after==null?"-":Number(r.balance_after).toFixed(2);
     const actions='<button class="btn btn-xs btn-outline admin-only" style="display:none;" onclick="showRechargeLogModal('+r.id+')">修改</button> <button class="btn btn-xs btn-danger admin-only" style="display:none;" onclick="deleteRechargeLog('+r.id+')">删除</button>';
-    return '<tr><td>'+member+'</td><td>'+escapeHtml(r.detail||"会员充卡")+'</td><td>'+Number(r.amount||0).toFixed(2)+'</td><td>'+balance+'</td><td>'+escapeHtml(r.payment_method||"-")+'</td><td>'+escapeHtml(r.notes||"-")+'</td><td style="font-size:12px;color:var(--text-dim);">'+t+'</td><td class="del-col" style="display:none;">'+actions+'</td></tr>';
+    return '<tr><td>'+member+'</td><td>'+escapeHtml(r.detail||"会员充卡")+'</td><td>'+Number(r.amount||0).toFixed(2)+'</td><td>'+Number(r.gift_amount||0).toFixed(2)+'</td><td>'+balance+'</td><td>'+escapeHtml(r.payment_method||"-")+'</td><td>'+escapeHtml(r.notes||"-")+'</td><td style="font-size:12px;color:var(--text-dim);">'+t+'</td><td class="del-col" style="display:none;">'+actions+'</td></tr>';
   }).join("");
   applyAdminToolsVisibility();
 }
@@ -1899,6 +2017,7 @@ function showBillingHistoryModal(billingId=null){
   document.getElementById("billingHistoryMember").value=bill?.settlement_member_name||"";
   document.getElementById("billingHistoryMemberPhone").value=bill?.settlement_member_phone||"";
   document.getElementById("billingHistoryNotes").value=bill?.notes||"";
+  document.getElementById("billingHistoryOpenTime").value=_toDateTimeInput(bill?.open_at||bill?.close_at);
   document.getElementById("billingHistoryTime").value=_toDateTimeInput(bill?.close_at);
   showModal("billingHistoryModal");
 }
@@ -1915,10 +2034,12 @@ async function confirmBillingHistory(){
     settlement_member_name:document.getElementById("billingHistoryMember").value.trim()||null,
     settlement_member_phone:document.getElementById("billingHistoryMemberPhone").value.trim()||null,
     notes:document.getElementById("billingHistoryNotes").value.trim()||null,
+    open_at:document.getElementById("billingHistoryOpenTime").value,
     close_at:document.getElementById("billingHistoryTime").value,
     admin_password:adminSessionPassword
   };
-  if(!data.room_no||!data.payment_method||!data.close_at||![data.room_fee,data.drinks_fee,data.total].every(v=>Number.isFinite(v)&&v>=0)){alert("请完整填写有效字段");return;}
+  if(!data.room_no||!data.payment_method||!data.open_at||!data.close_at||![data.room_fee,data.drinks_fee,data.total].every(v=>Number.isFinite(v)&&v>=0)){alert("请完整填写有效字段");return;}
+  if(new Date(data.open_at)>new Date(data.close_at)){alert("开台时间不能晚于结账时间");return;}
   const url=editingBillingHistoryId==null?API.billingHistory:API.billingHistory+"/"+editingBillingHistoryId;
   try{
     const r=await fetch(url,{method:editingBillingHistoryId==null?"POST":"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(data)}),j=await r.json();
@@ -1942,6 +2063,7 @@ async function showRechargeLogModal(logId=null){
     document.getElementById("rechargeLogMemberName").value=log.member_name||"";
     document.getElementById("rechargeLogMemberPhone").value=log.member_phone||"";
     document.getElementById("rechargeLogAmount").value=Number(log.amount||0).toFixed(2);
+    document.getElementById("rechargeLogGiftAmount").value=Number(log.gift_amount||0).toFixed(2);
     document.getElementById("rechargeLogBalance").value=log.balance_after==null?"":Number(log.balance_after).toFixed(2);
     document.getElementById("rechargeLogDetail").value=log.detail||"会员充卡";
     document.getElementById("rechargeLogMethod").value=log.payment_method||"现金";
@@ -1950,6 +2072,7 @@ async function showRechargeLogModal(logId=null){
   }else{
     onRechargeLogMemberChange();
     document.getElementById("rechargeLogAmount").value="";
+    document.getElementById("rechargeLogGiftAmount").value="0";
     document.getElementById("rechargeLogBalance").value=Number(membersData[0].balance||0).toFixed(2);
     document.getElementById("rechargeLogDetail").value="会员充卡";
     document.getElementById("rechargeLogMethod").value="现金";
@@ -1977,13 +2100,14 @@ async function confirmRechargeLog(){
     member_phone:document.getElementById("rechargeLogMemberPhone").value.trim(),
     detail:document.getElementById("rechargeLogDetail").value.trim(),
     amount:parseFloat(document.getElementById("rechargeLogAmount").value),
+    gift_amount:parseFloat(document.getElementById("rechargeLogGiftAmount").value)||0,
     balance_after:parseFloat(document.getElementById("rechargeLogBalance").value),
     payment_method:document.getElementById("rechargeLogMethod").value.trim(),
     notes:document.getElementById("rechargeLogNotes").value.trim()||null,
     created_at:document.getElementById("rechargeLogTime").value,
     admin_password:adminSessionPassword
   };
-  if(!data.member_id||!data.member_name||!data.member_phone||!data.detail||!data.payment_method||!Number.isFinite(data.amount)||data.amount<=0||!Number.isFinite(data.balance_after)||data.balance_after<0||!data.created_at){alert("请完整填写有效字段");return;}
+  if(!data.member_id||!data.member_name||!data.member_phone||!data.detail||!data.payment_method||!Number.isFinite(data.amount)||data.amount<=0||!Number.isFinite(data.gift_amount)||data.gift_amount<0||!Number.isFinite(data.balance_after)||data.balance_after<0||!data.created_at){alert("请完整填写有效字段");return;}
   const url=editingRechargeLogId==null?API.rechargeLogs:API.rechargeLogs+"/"+editingRechargeLogId;
   try{
     const r=await fetch(url,{method:editingRechargeLogId==null?"POST":"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(data)}),j=await r.json();

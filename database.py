@@ -81,6 +81,7 @@ def init_db():
             member_name TEXT,
             member_phone TEXT,
             amount REAL NOT NULL,
+            gift_amount REAL DEFAULT 0,
             balance_after REAL,
             payment_method TEXT DEFAULT '现金',
             detail TEXT DEFAULT '会员充卡',
@@ -295,6 +296,7 @@ def _migrate_recharge_log_columns(conn: sqlite3.Connection):
         ("member_name", "TEXT"),
         ("member_phone", "TEXT"),
         ("balance_after", "REAL"),
+        ("gift_amount", "REAL DEFAULT 0"),
         ("detail", "TEXT DEFAULT '会员充卡'"),
         ("notes", "TEXT"),
     ]

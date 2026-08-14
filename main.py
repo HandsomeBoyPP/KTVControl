@@ -498,17 +498,30 @@ async def recharge_member(member_id: int, req: RechargeRequest):
         member = conn.execute("SELECT * FROM members WHERE id = ?", (member_id,)).fetchone()
         if not member:
             raise HTTPException(404, "会员不存在")
-        new_balance = round(member["balance"] + req.amount, 2)
+        credited_total = round(req.amount + req.gift_amount, 2)
+        new_balance = round(member["balance"] + credited_total, 2)
         conn.execute("UPDATE members SET balance = ? WHERE id = ?", (new_balance, member_id))
         conn.execute(
             """INSERT INTO recharge_logs
-               (member_id, member_name, member_phone, amount, balance_after, payment_method, detail, notes)
-               VALUES (?, ?, ?, ?, ?, ?, '会员充卡', ?)""",
-            (member_id, member["name"], member["phone"], req.amount, new_balance, req.payment_method, (req.notes or "").strip() or None),
+               (member_id, member_name, member_phone, amount, gift_amount,
+                balance_after, payment_method, detail, notes)
+               VALUES (?, ?, ?, ?, ?, ?, ?, '会员充卡', ?)""",
+            (
+                member_id, member["name"], member["phone"], req.amount, req.gift_amount,
+                new_balance, req.payment_method, (req.notes or "").strip() or None,
+            ),
         )
         conn.commit()
-        log_operation("recharge_member", None, f"会员充值 {member['name']} amount={req.amount:.2f} balance_after={new_balance:.2f}")
-        return {"code": 0, "msg": "ok", "balance": new_balance}
+        log_operation(
+            "recharge_member", None,
+            f"会员充值 {member['name']} amount={req.amount:.2f} gift={req.gift_amount:.2f} "
+            f"credited_total={credited_total:.2f} balance_after={new_balance:.2f}",
+        )
+        return {
+            "code": 0, "msg": "ok", "balance": new_balance,
+            "amount": round(req.amount, 2), "gift_amount": round(req.gift_amount, 2),
+            "credited_total": credited_total,
+        }
     finally:
         conn.close()
 
@@ -526,7 +539,7 @@ async def list_recharge_logs(x_records_password: str = Header(default="")):
     conn = get_db()
     try:
         rows = conn.execute(
-            """SELECT id, member_id, member_name, member_phone, amount,
+            """SELECT id, member_id, member_name, member_phone, amount, gift_amount,
                       balance_after, payment_method, detail, notes, created_at
                FROM recharge_logs
                ORDER BY datetime(created_at) DESC, id DESC
@@ -549,11 +562,12 @@ async def create_recharge_log(req: RechargeLogWriteRequest):
         created_at = _recharge_log_time(req.created_at)
         conn.execute(
             """INSERT INTO recharge_logs
-               (member_id, member_name, member_phone, amount, balance_after, payment_method, detail, notes, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               (member_id, member_name, member_phone, amount, gift_amount,
+                balance_after, payment_method, detail, notes, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 req.member_id, req.member_name, req.member_phone,
-                round(req.amount, 2), round(req.balance_after, 2),
+                round(req.amount, 2), round(req.gift_amount, 2), round(req.balance_after, 2),
                 req.payment_method, req.detail, (req.notes or "").strip() or None, created_at,
             ),
         )
@@ -579,12 +593,12 @@ async def update_recharge_log(log_id: int, req: RechargeLogWriteRequest):
             raise HTTPException(404, "会员不存在")
         conn.execute(
             """UPDATE recharge_logs
-               SET member_id = ?, member_name = ?, member_phone = ?, amount = ?,
+               SET member_id = ?, member_name = ?, member_phone = ?, amount = ?, gift_amount = ?,
                    balance_after = ?, payment_method = ?, detail = ?, notes = ?, created_at = ?
                WHERE id = ?""",
             (
                 req.member_id, req.member_name, req.member_phone,
-                round(req.amount, 2), round(req.balance_after, 2),
+                round(req.amount, 2), round(req.gift_amount, 2), round(req.balance_after, 2),
                 req.payment_method, req.detail, (req.notes or "").strip() or None,
                 _recharge_log_time(req.created_at), log_id,
             ),
@@ -1584,13 +1598,14 @@ def _build_daily_business_report(date: str = "") -> dict:
         rows = conn.execute(
             """SELECT b.id, b.room_no, b.package_id, b.room_fee, b.drinks_fee,
                       b.total, b.payment_method, b.settlement_member_name,
-                      b.settlement_member_phone, b.notes, b.close_at,
+                      b.settlement_member_phone, b.notes, b.open_at, b.close_at,
                       p.name AS package_name
                FROM billing_records b
                LEFT JOIN packages p ON p.id = b.package_id
                WHERE b.status = 'closed'
-                 AND b.close_at >= ? AND b.close_at < ?
-               ORDER BY b.close_at DESC, b.id DESC""",
+                 AND COALESCE(NULLIF(b.open_at, ''), b.close_at) >= ?
+                 AND COALESCE(NULLIF(b.open_at, ''), b.close_at) < ?
+               ORDER BY COALESCE(NULLIF(b.open_at, ''), b.close_at) DESC, b.id DESC""",
             (start_text, end_text),
         ).fetchall()
         bills = [dict(row) for row in rows]
@@ -1656,6 +1671,127 @@ async def get_daily_business_report(date: str = "", x_records_password: str = He
     return _build_daily_business_report(date)
 
 
+
+def _month_business_bounds(month: str = "") -> tuple[datetime, datetime]:
+    if month:
+        try:
+            month_start = datetime.strptime(month, "%Y-%m")
+        except ValueError:
+            raise HTTPException(400, "月份格式应为 YYYY-MM")
+    else:
+        current_business_date = datetime.now()
+        if current_business_date.hour < 6:
+            current_business_date -= timedelta(days=1)
+        month_start = current_business_date.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    start_at = month_start.replace(hour=6)
+    if month_start.month == 12:
+        next_month = month_start.replace(year=month_start.year + 1, month=1)
+    else:
+        next_month = month_start.replace(month=month_start.month + 1)
+    return start_at, next_month.replace(hour=6)
+
+
+def _actual_payment_category(method: str) -> str:
+    value = (method or "").strip()
+    for category in ("美团", "微信", "支付宝", "现金"):
+        if category in value:
+            return category
+    return "其他"
+
+
+@app.get("/api/reports/monthly")
+async def get_monthly_business_report(month: str = "", x_records_password: str = Header(default="")):
+    if not verify_records_password(x_records_password):
+        raise HTTPException(403, "记录查看密码错误")
+    start_at, end_at = _month_business_bounds(month)
+    start_text = start_at.strftime("%Y-%m-%d %H:%M:%S")
+    end_text = end_at.strftime("%Y-%m-%d %H:%M:%S")
+
+    daily = {}
+    cursor = start_at
+    while cursor < end_at:
+        date_text = cursor.strftime("%Y-%m-%d")
+        daily[date_text] = {
+            "business_date": date_text, "actual_income_total": 0.0,
+            "美团": 0.0, "微信": 0.0, "支付宝": 0.0, "现金": 0.0, "其他": 0.0,
+            "recharge_total": 0.0, "member_balance_total": 0.0, "bill_count": 0,
+        }
+        cursor += timedelta(days=1)
+
+    summary = {
+        "actual_income_total": 0.0,
+        "美团": 0.0, "微信": 0.0, "支付宝": 0.0, "现金": 0.0, "其他": 0.0,
+        "recharge_total": 0.0, "member_balance_total": 0.0, "bill_count": 0,
+    }
+    conn = get_db()
+    try:
+        bills = conn.execute(
+            """SELECT total, payment_method,
+                      strftime(
+                          '%Y-%m-%d',
+                          datetime(COALESCE(NULLIF(open_at, ''), close_at), '-6 hours')
+                      ) AS business_date
+               FROM billing_records
+               WHERE status = 'closed'
+                 AND COALESCE(NULLIF(open_at, ''), close_at) >= ?
+                 AND COALESCE(NULLIF(open_at, ''), close_at) < ?""",
+            (start_text, end_text),
+        ).fetchall()
+        recharges = conn.execute(
+            """SELECT amount, payment_method,
+                      strftime('%Y-%m-%d', datetime(created_at, '-6 hours')) AS business_date
+               FROM recharge_logs
+               WHERE created_at >= ? AND created_at < ?""",
+            (start_text, end_text),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    for row in bills:
+        date_text = row["business_date"]
+        if date_text not in daily:
+            continue
+        amount = round(float(row["total"] or 0), 2)
+        daily[date_text]["bill_count"] += 1
+        summary["bill_count"] += 1
+        if (row["payment_method"] or "").strip() == "会员余额":
+            daily[date_text]["member_balance_total"] += amount
+            summary["member_balance_total"] += amount
+            continue
+        category = _actual_payment_category(row["payment_method"])
+        daily[date_text][category] += amount
+        daily[date_text]["actual_income_total"] += amount
+        summary[category] += amount
+        summary["actual_income_total"] += amount
+
+    for row in recharges:
+        date_text = row["business_date"]
+        if date_text not in daily:
+            continue
+        amount = round(float(row["amount"] or 0), 2)
+        category = _actual_payment_category(row["payment_method"])
+        daily[date_text][category] += amount
+        daily[date_text]["actual_income_total"] += amount
+        daily[date_text]["recharge_total"] += amount
+        summary[category] += amount
+        summary["actual_income_total"] += amount
+        summary["recharge_total"] += amount
+
+    for values in [summary, *daily.values()]:
+        for key, value in values.items():
+            if key not in ("business_date", "bill_count"):
+                values[key] = round(value, 2)
+
+    return {
+        "code": 0,
+        "data": {
+            "month": start_at.strftime("%Y-%m"),
+            "start_at": start_text,
+            "end_at": end_text,
+            "summary": summary,
+            "days": list(daily.values()),
+        },
+    }
 # ---- Billing History Routes ----
 
 @app.get("/api/billing/history")
@@ -1667,8 +1803,10 @@ async def list_billing_history(date: str = ""):
     try:
         rows = conn.execute(
             """SELECT * FROM billing_records
-               WHERE status = 'closed' AND close_at >= ? AND close_at < ?
-               ORDER BY close_at DESC, id DESC""",
+               WHERE status = 'closed'
+                 AND COALESCE(NULLIF(open_at, ''), close_at) >= ?
+                 AND COALESCE(NULLIF(open_at, ''), close_at) < ?
+               ORDER BY COALESCE(NULLIF(open_at, ''), close_at) DESC, id DESC""",
             (start_text, end_text),
         ).fetchall()
         result = []
@@ -1693,6 +1831,7 @@ async def create_billing_history(req: BillingHistoryWriteRequest):
     conn = get_db()
     try:
         close_at = _recharge_log_time(req.close_at)
+        open_at = _recharge_log_time(req.open_at or req.close_at)
         conn.execute(
             """INSERT INTO billing_records
                (room_no, open_at, close_at, room_fee, drinks_fee, total, discount,
@@ -1700,7 +1839,7 @@ async def create_billing_history(req: BillingHistoryWriteRequest):
                 notes, status)
                VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, 'closed')""",
             (
-                req.room_no, close_at, close_at, round(req.room_fee, 2),
+                req.room_no, open_at, close_at, round(req.room_fee, 2),
                 round(req.drinks_fee, 2), round(req.total, 2), req.payment_method,
                 (req.settlement_member_name or "").strip() or None,
                 (req.settlement_member_phone or "").strip() or None,
@@ -1722,15 +1861,16 @@ async def update_billing_history(billing_id: int, req: BillingHistoryWriteReques
     conn = get_db()
     try:
         existing = conn.execute(
-            "SELECT id FROM billing_records WHERE id = ? AND status = 'closed'", (billing_id,)
+            "SELECT id, open_at FROM billing_records WHERE id = ? AND status = 'closed'", (billing_id,)
         ).fetchone()
         if not existing:
             raise HTTPException(404, "结账记录不存在")
+        open_at = _recharge_log_time(req.open_at) if req.open_at else (existing["open_at"] or _recharge_log_time(req.close_at))
         conn.execute(
             """UPDATE billing_records
                SET room_no = ?, room_fee = ?, drinks_fee = ?, total = ?, discount = 0,
                    payment_method = ?, settlement_member_name = ?,
-                   settlement_member_phone = ?, notes = ?, close_at = ?
+                   settlement_member_phone = ?, notes = ?, open_at = ?, close_at = ?
                WHERE id = ?""",
             (
                 req.room_no, round(req.room_fee, 2), round(req.drinks_fee, 2),
@@ -1738,7 +1878,7 @@ async def update_billing_history(billing_id: int, req: BillingHistoryWriteReques
                 (req.settlement_member_name or "").strip() or None,
                 (req.settlement_member_phone or "").strip() or None,
                 (req.notes or "").strip() or None,
-                _recharge_log_time(req.close_at), billing_id,
+                open_at, _recharge_log_time(req.close_at), billing_id,
             ),
         )
         conn.commit()
