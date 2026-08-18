@@ -1941,7 +1941,7 @@ async function fetchBillingHistory(){
     document.getElementById("historyRange").textContent="统计范围："+json.start_at+" 至 "+json.end_at+"（不含结束时间）";
     renderBillingHistory(billingHistoryData);
   }catch(e){
-    document.querySelector("#historyTable tbody").innerHTML='<tr><td colspan="10" class="empty-hint">记录加载失败：'+escapeHtml(e.message)+'</td></tr>';
+    document.querySelector("#historyTable tbody").innerHTML='<tr><td colspan="11" class="empty-hint">记录加载失败：'+escapeHtml(e.message)+'</td></tr>';
   }
 }
 
@@ -1967,13 +1967,21 @@ function _historyTimeValue(value){
 
 function renderBillingHistory(bills){
   const tb=document.querySelector("#historyTable tbody");
-  if(!bills.length){tb.innerHTML='<tr><td colspan="10" class="empty-hint">暂无记录</td></tr>';return;}
+  if(!bills.length){tb.innerHTML='<tr><td colspan="11" class="empty-hint">暂无记录</td></tr>';return;}
   tb.innerHTML=bills.map(b=>{
     const openTime=b.open_at?String(b.open_at).replace("T"," ").substring(0,19):(b.close_at?String(b.close_at).replace("T"," ").substring(0,19):"-");
     const closeTime=b.close_at?String(b.close_at).replace("T"," ").substring(0,19):"-";
     const member=b.settlement_member_name?escapeHtml(b.settlement_member_name)+'<div style="font-size:11px;color:var(--text-dim);">'+escapeHtml(b.settlement_member_phone||"")+'</div>':"-";
+    const drinks=b.drinks||[];
+    const drinkDetails=drinks.length?'<div class="history-drink-list">'+drinks.map(item=>{
+      const qty=Number(item.qty||0);
+      const unit=escapeHtml(item.unit_label||"");
+      const amount=qty*Number(item.unit_price||0);
+      const priceLabel=amount>0?_reportMoney(amount):(item.source==="package"?"套餐内":"赠送");
+      return '<div class="history-drink-item"><span>'+escapeHtml(item.item_name||"-")+' × '+qty+unit+'</span><small>'+priceLabel+'</small></div>';
+    }).join("")+'</div>':"-";
     const actions='<button class="btn btn-xs btn-outline admin-only" style="display:none;" onclick="showBillingHistoryModal('+b.id+')">修改</button> <button class="btn btn-xs btn-danger admin-only" style="display:none;" onclick="deleteBilling('+b.id+')">删除</button>';
-    return '<tr><td>'+escapeHtml(b.room_no||"-")+'</td><td class="cell-time">'+openTime+'</td><td class="cell-time">'+closeTime+'</td><td>'+Number(b.room_fee||0).toFixed(2)+'</td><td>'+Number(b.drinks_fee||0).toFixed(2)+'</td><td>'+Number(b.total||0).toFixed(2)+'</td><td>'+escapeHtml(b.payment_method||"-")+'</td><td>'+member+'</td><td>'+escapeHtml(b.notes||"-")+'</td><td class="del-col" style="display:none;">'+actions+'</td></tr>';
+    return '<tr><td>'+escapeHtml(b.room_no||"-")+'</td><td class="cell-time">'+openTime+'</td><td class="cell-time">'+closeTime+'</td><td>'+Number(b.room_fee||0).toFixed(2)+'</td><td>'+Number(b.drinks_fee||0).toFixed(2)+'</td><td>'+drinkDetails+'</td><td>'+Number(b.total||0).toFixed(2)+'</td><td>'+escapeHtml(b.payment_method||"-")+'</td><td>'+member+'</td><td>'+escapeHtml(b.notes||"-")+'</td><td class="del-col" style="display:none;">'+actions+'</td></tr>';
   }).join("");
   applyAdminToolsVisibility();
 }
