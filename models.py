@@ -213,19 +213,35 @@ class UpdateBillingRequest(RequestModel):
 
 class SaveBillingDraftRequest(RequestModel):
     package_id: int = Field(gt=0)
-    payment_method: Literal["\u73b0\u91d1", "\u5fae\u4fe1", "\u652f\u4ed8\u5b9d", "\u7f8e\u56e2", "\u4f1a\u5458\u4f59\u989d"] = "\u73b0\u91d1"
+    payment_method: Literal["现金", "微信", "支付宝", "美团", "会员余额"] | None = None
     actual_total: float | None = Field(default=None, ge=0)
     notes: str | None = Field(default=None, max_length=200)
+
+class SettlementPaymentItem(RequestModel):
+    payment_method: Literal["现金", "微信", "支付宝", "美团"]
+    amount: float = Field(gt=0)
+
 
 class SettlementRequest(RequestModel):
     billing_id: int = Field(gt=0)
     package_id: int = Field(gt=0)
-    payment_method: Literal["现金", "微信", "支付宝", "美团", "会员余额"] = "现金"
+    payment_method: Literal["现金", "微信", "支付宝", "美团", "会员余额"] | None = None
+    payment_splits: list[SettlementPaymentItem] = Field(default_factory=list)
     actual_total: float | None = Field(default=None, ge=0)
     member_phone: str | None = Field(default=None, max_length=32)
     member_password: str | None = Field(default=None, max_length=64)
     notes: str | None = Field(default=None, max_length=200)
 
+    @model_validator(mode="after")
+    def validate_payment(self) -> Self:
+        if not self.payment_method and not self.payment_splits:
+            raise ValueError("请选择支付方式")
+        if self.payment_method == "会员余额" and self.payment_splits:
+            raise ValueError("会员余额暂不支持组合支付")
+        methods = [item.payment_method for item in self.payment_splits]
+        if len(methods) != len(set(methods)):
+            raise ValueError("组合支付方式不能重复")
+        return self
 
 class BillingHistoryWriteRequest(RequestModel):
     room_no: str = Field(min_length=1, max_length=64)

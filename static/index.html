@@ -10,7 +10,7 @@
 
 <title>KTV 前台控制</title>
 
-<link rel="stylesheet" href="/static/style.css?v=13">
+<link rel="stylesheet" href="/static/style.css?v=15">
 
 </head>
 
@@ -77,8 +77,8 @@
     <div class="section-header"><h2>收银台 · 当前开台账单</h2></div>
     <div class="table-wrap" style="margin-bottom:20px;">
       <table class="data-table" id="billingTable">
-        <thead><tr><th>房间</th><th>开台时间</th><th>时长(min)</th><th>酒水费</th><th>实收金额</th><th>客户类型</th><th>操作</th></tr></thead>
-        <tbody><tr><td colspan="7" class="empty-hint">暂无开台账单</td></tr></tbody>
+        <thead><tr><th>房间</th><th>开台时间</th><th>时长(min)</th><th>酒水费</th><th>酒水明细</th><th>实收金额</th><th>客户类型</th><th>操作</th></tr></thead>
+        <tbody><tr><td colspan="8" class="empty-hint">暂无开台账单</td></tr></tbody>
       </table>
     </div>
     <div class="card" id="settleCard" style="display:none;">
@@ -103,7 +103,20 @@
         <small id="settlePriceHint" style="display:block;color:var(--text-dim);margin-top:4px;">默认等于应收合计</small>
       </div>
       <div class="form-group"><label>支付方式</label>
-        <select id="settlePayment" onchange="onSettlePaymentChange()"><option value="现金">现金</option><option value="微信">微信</option><option value="支付宝">支付宝</option><option value="美团">美团</option><option value="会员余额">会员余额</option></select>
+        <select id="settlePayment" onchange="onSettlePaymentChange()"><option value="">-- 请选择支付方式 --</option><option value="现金">现金</option><option value="微信">微信</option><option value="支付宝">支付宝</option><option value="美团">美团</option><option value="组合支付">组合支付</option><option value="会员余额">会员余额</option></select>
+      </div>
+      <div id="splitPaymentPanel" class="split-payment-panel" style="display:none;">
+        <div class="split-payment-title">组合支付金额</div>
+        <div class="split-payment-grid">
+          <label>美团<input type="number" min="0" step="0.01" value="0" data-split-method="美团" oninput="updateSplitPaymentSummary()"></label>
+          <label>微信<input type="number" min="0" step="0.01" value="0" data-split-method="微信" oninput="updateSplitPaymentSummary()"></label>
+          <label>支付宝<input type="number" min="0" step="0.01" value="0" data-split-method="支付宝" oninput="updateSplitPaymentSummary()"></label>
+          <label>现金<input type="number" min="0" step="0.01" value="0" data-split-method="现金" oninput="updateSplitPaymentSummary()"></label>
+        </div>
+        <div class="split-payment-summary">
+          <span>支付合计：<strong id="splitPaymentTotal">¥0.00</strong></span>
+          <span><span id="splitPaymentDifferenceLabel">还差</span>：<strong id="splitPaymentRemaining">¥0.00</strong></span>
+        </div>
       </div>
       <div class="form-group"><label>备注</label><input type="text" id="settleNotes" maxlength="200" placeholder="修改实际价格时必填，至少10个字" oninput="updateSettlePriceHint()"></div>
       <div id="memberSettleInfo" style="display:none;">
@@ -267,8 +280,8 @@
     </div>
     <div class="table-wrap">
       <table class="data-table" id="inventoryTable">
-        <thead><tr><th>分类</th><th>名称</th><th>单位</th><th>零售价</th><th>整箱规格</th><th>整箱价</th><th class="admin-only" style="display:none;">单位成本</th><th>库存</th><th>操作</th></tr></thead>
-        <tbody><tr><td colspan="9" class="empty-hint">暂无库存</td></tr></tbody>
+        <thead><tr><th>分类</th><th>名称</th><th>单位</th><th>零售价</th><th>整箱规格</th><th>整箱价</th><th class="admin-only" style="display:none;">单位成本</th><th>库存</th><th>存酒</th><th>操作</th></tr></thead>
+        <tbody><tr><td colspan="10" class="empty-hint">暂无库存</td></tr></tbody>
       </table>
     </div>
   </section>
@@ -814,7 +827,7 @@
     </div>
   </div>
 </div>
-<script src="/static/app.js?v=40"></script>
+<script src="/static/app.js?v=43"></script>
 
 
 

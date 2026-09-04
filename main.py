@@ -1094,7 +1094,22 @@ async def delete_package(package_id: int, req: DeletePackageRequest):
 async def list_inventory():
     conn = get_db()
     try:
-        rows = conn.execute("SELECT * FROM inventory ORDER BY category, name").fetchall()
+        rows = conn.execute(
+            """SELECT i.*,
+                      CASE WHEN i.category = '酒水'
+                           THEN COALESCE(s.stored_quantity, 0)
+                           ELSE 0
+                      END AS stored_quantity
+               FROM inventory i
+               LEFT JOIN (
+                   SELECT LOWER(TRIM(item_name)) AS normalized_name,
+                          SUM(quantity) AS stored_quantity
+                   FROM member_stored_drinks
+                   WHERE status = 'active' AND quantity > 0
+                   GROUP BY LOWER(TRIM(item_name))
+               ) s ON s.normalized_name = LOWER(TRIM(i.name))
+               ORDER BY i.category, i.name"""
+        ).fetchall()
         return {"code": 0, "data": [dict(r) for r in rows]}
     finally:
         conn.close()
@@ -1484,7 +1499,21 @@ async def settle_billing(req: SettlementRequest):
         subtotal = round(room_fee + drinks_fee, 2)
         total, notes, price_modified = _resolve_actual_total(subtotal, req.actual_total, req.notes)
 
-        payment_method = req.payment_method
+        if req.payment_splits:
+            payment_breakdown = [
+                {"method": item.payment_method, "amount": round(item.amount, 2)}
+                for item in req.payment_splits
+            ]
+            split_total = round(sum(item["amount"] for item in payment_breakdown), 2)
+            if abs(split_total - total) >= 0.01:
+                raise HTTPException(
+                    400, f"组合支付合计{split_total:.2f}元，与实收金额{total:.2f}元不一致"
+                )
+            payment_method = "+".join(item["method"] for item in payment_breakdown)
+        else:
+            payment_method = req.payment_method
+            payment_breakdown = [{"method": payment_method, "amount": total}]
+
         member = None
         member_balance_before = None
         member_balance_after = None
@@ -1539,6 +1568,15 @@ async def settle_billing(req: SettlementRequest):
                 member_balance_after, req.billing_id,
             ),
         )
+        conn.execute("DELETE FROM billing_payments WHERE billing_id = ?", (req.billing_id,))
+        conn.executemany(
+            """INSERT INTO billing_payments (billing_id, payment_method, amount)
+               VALUES (?, ?, ?)""",
+            [
+                (req.billing_id, item["method"], item["amount"])
+                for item in payment_breakdown
+            ],
+        )
         conn.commit()
 
         room_name = billing["room_no"]
@@ -1552,13 +1590,14 @@ async def settle_billing(req: SettlementRequest):
         log_operation(
             "settle_billing", room_name,
             f"结账 room_fee={room_fee} drinks_fee={drinks_fee} calculated_total={subtotal} "
-            f"actual_total={total} price_modified={price_modified} payment={payment_method} "
+            f"actual_total={total} price_modified={price_modified} payment={payment_breakdown} "
             f"notes={notes or ''} room_kept_open=true{member_detail}",
         )
         return {
             "code": 0, "msg": "ok", "total": total, "room_fee": room_fee,
             "calculated_total": subtotal, "cash_supplement": 0,
-            "payment_method": payment_method, "price_modified": price_modified,
+            "payment_method": payment_method, "payment_breakdown": payment_breakdown,
+            "price_modified": price_modified,
             "notes": notes, "room_kept_open": True,
             "settlement_member_name": settlement_member_name,
             "settlement_member_phone": settlement_member_phone,
@@ -1570,6 +1609,34 @@ async def settle_billing(req: SettlementRequest):
     finally:
         conn.close()
 
+
+def _attach_billing_payment_breakdowns(conn, bills: list[dict]) -> None:
+    """Attach split payments; legacy bills fall back to their single payment method."""
+    billing_ids = [bill["id"] for bill in bills if bill.get("id") is not None]
+    payment_map = {}
+    if billing_ids:
+        placeholders = ",".join("?" for _ in billing_ids)
+        rows = conn.execute(
+            f"""SELECT billing_id, payment_method, amount
+                FROM billing_payments
+                WHERE billing_id IN ({placeholders})
+                ORDER BY billing_id, id""",
+            billing_ids,
+        ).fetchall()
+        for row in rows:
+            payment_map.setdefault(row["billing_id"], []).append({
+                "method": row["payment_method"],
+                "amount": round(float(row["amount"] or 0), 2),
+            })
+    for bill in bills:
+        payments = payment_map.get(bill.get("id"), [])
+        if not payments:
+            method = (bill.get("payment_method") or "未填写").strip() or "未填写"
+            payments = [{
+                "method": method,
+                "amount": round(float(bill.get("total") or 0), 2),
+            }]
+        bill["payment_breakdown"] = payments
 
 # ---- Business Report Routes ----
 
@@ -1609,20 +1676,22 @@ def _build_daily_business_report(date: str = "") -> dict:
             (start_text, end_text),
         ).fetchall()
         bills = [dict(row) for row in rows]
+        _attach_billing_payment_breakdowns(conn, bills)
 
         payment_totals = {}
         business_total = 0.0
         checkout_received_total = 0.0
         member_balance_total = 0.0
         for bill in bills:
-            amount = float(bill.get("total") or 0)
-            method = (bill.get("payment_method") or "未填写").strip() or "未填写"
-            business_total += amount
-            payment_totals[method] = payment_totals.get(method, 0.0) + amount
-            if method == "会员余额":
-                member_balance_total += amount
-            else:
-                checkout_received_total += amount
+            business_total += float(bill.get("total") or 0)
+            for payment in bill["payment_breakdown"]:
+                amount = float(payment.get("amount") or 0)
+                method = (payment.get("method") or "未填写").strip() or "未填写"
+                payment_totals[method] = payment_totals.get(method, 0.0) + amount
+                if method == "会员余额":
+                    member_balance_total += amount
+                else:
+                    checkout_received_total += amount
 
         recharge_row = conn.execute(
             """SELECT COALESCE(SUM(amount), 0) AS total
@@ -1726,7 +1795,7 @@ async def get_monthly_business_report(month: str = "", x_records_password: str =
     conn = get_db()
     try:
         bills = conn.execute(
-            """SELECT total, payment_method,
+            """SELECT id, total, payment_method,
                       strftime(
                           '%Y-%m-%d',
                           datetime(COALESCE(NULLIF(open_at, ''), close_at), '-6 hours')
@@ -1737,6 +1806,8 @@ async def get_monthly_business_report(month: str = "", x_records_password: str =
                  AND COALESCE(NULLIF(open_at, ''), close_at) < ?""",
             (start_text, end_text),
         ).fetchall()
+        bills = [dict(row) for row in bills]
+        _attach_billing_payment_breakdowns(conn, bills)
         recharges = conn.execute(
             """SELECT amount, payment_method,
                       strftime('%Y-%m-%d', datetime(created_at, '-6 hours')) AS business_date
@@ -1751,18 +1822,20 @@ async def get_monthly_business_report(month: str = "", x_records_password: str =
         date_text = row["business_date"]
         if date_text not in daily:
             continue
-        amount = round(float(row["total"] or 0), 2)
         daily[date_text]["bill_count"] += 1
         summary["bill_count"] += 1
-        if (row["payment_method"] or "").strip() == "会员余额":
-            daily[date_text]["member_balance_total"] += amount
-            summary["member_balance_total"] += amount
-            continue
-        category = _actual_payment_category(row["payment_method"])
-        daily[date_text][category] += amount
-        daily[date_text]["actual_income_total"] += amount
-        summary[category] += amount
-        summary["actual_income_total"] += amount
+        for payment in row["payment_breakdown"]:
+            amount = round(float(payment["amount"] or 0), 2)
+            method = (payment["method"] or "").strip()
+            if method == "会员余额":
+                daily[date_text]["member_balance_total"] += amount
+                summary["member_balance_total"] += amount
+                continue
+            category = _actual_payment_category(method)
+            daily[date_text][category] += amount
+            daily[date_text]["actual_income_total"] += amount
+            summary[category] += amount
+            summary["actual_income_total"] += amount
 
     for row in recharges:
         date_text = row["business_date"]
@@ -1815,6 +1888,7 @@ async def list_billing_history(date: str = ""):
             drinks = conn.execute("SELECT * FROM drink_orders WHERE billing_id = ?", (r["id"],)).fetchall()
             bill["drinks"] = [dict(d) for d in drinks]
             result.append(bill)
+        _attach_billing_payment_breakdowns(conn, result)
         return {
             "code": 0, "data": result,
             "business_date": start_at.strftime("%Y-%m-%d"),
@@ -1881,6 +1955,7 @@ async def update_billing_history(billing_id: int, req: BillingHistoryWriteReques
                 open_at, _recharge_log_time(req.close_at), billing_id,
             ),
         )
+        conn.execute("DELETE FROM billing_payments WHERE billing_id = ?", (billing_id,))
         conn.commit()
         log_operation("update_billing_history", req.room_no, f"修改结账记录 id={billing_id} total={req.total}")
         return {"code": 0, "msg": "ok"}
@@ -1898,6 +1973,7 @@ async def delete_billing(billing_id: int, admin_password: str = ""):
         if not billing:
             raise HTTPException(404, "账单不存在")
         conn.execute("DELETE FROM drink_orders WHERE billing_id = ?", (billing_id,))
+        conn.execute("DELETE FROM billing_payments WHERE billing_id = ?", (billing_id,))
         conn.execute("DELETE FROM billing_records WHERE id = ?", (billing_id,))
         conn.commit()
         log_operation("delete_billing", billing["room_no"], f"删除账单 id={billing_id}")

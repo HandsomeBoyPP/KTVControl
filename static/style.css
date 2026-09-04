@@ -761,3 +761,58 @@ body {
   color: var(--text-dim);
   font-size: 11px;
 }
+.stored-stock-total {
+  color: var(--accent);
+  font-weight: 700;
+  white-space: nowrap;
+}
+.split-payment-panel {
+  margin: -2px 0 14px;
+  padding: 13px;
+  border: 1px solid rgba(212,168,83,.45);
+  border-radius: 8px;
+  background: rgba(212,168,83,.07);
+}
+.split-payment-title {
+  margin-bottom: 10px;
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 700;
+}
+.split-payment-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.split-payment-grid label {
+  color: var(--text-dim);
+  font-size: 12px;
+}
+.split-payment-grid input { margin-top: 5px; }
+.split-payment-summary {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 11px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 13px;
+}
+.split-payment-summary strong { color: var(--accent); }
+.billing-payment-list {
+  display: grid;
+  gap: 4px;
+  min-width: 105px;
+}
+.billing-payment-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  white-space: nowrap;
+  font-size: 12px;
+}
+.billing-payment-item strong { color: var(--accent); }
+@media (max-width: 600px) {
+  .split-payment-grid { grid-template-columns: 1fr; }
+}

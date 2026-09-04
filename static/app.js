@@ -451,7 +451,7 @@ function renderDailyReport(report){
       : "-";
     const openTime=bill.open_at?String(bill.open_at).replace("T"," ").substring(0,19):(bill.close_at?String(bill.close_at).replace("T"," ").substring(0,19):"-");
     const closeTime=bill.close_at?String(bill.close_at).replace("T"," ").substring(0,19):"-";
-    return '<tr><td class="cell-time">'+openTime+'</td><td class="cell-time">'+closeTime+'</td><td>'+escapeHtml(bill.room_no||"-")+'</td><td>'+escapeHtml(bill.package_name||"-")+'</td><td>'+_reportMoney(bill.room_fee)+'</td><td>'+_reportMoney(bill.drinks_fee)+'</td><td class="report-total-cell">'+_reportMoney(bill.total)+'</td><td>'+escapeHtml(bill.payment_method||"-")+'</td><td>'+member+'</td><td>'+escapeHtml(bill.notes||"-")+'</td></tr>';
+    return '<tr><td class="cell-time">'+openTime+'</td><td class="cell-time">'+closeTime+'</td><td>'+escapeHtml(bill.room_no||"-")+'</td><td>'+escapeHtml(bill.package_name||"-")+'</td><td>'+_reportMoney(bill.room_fee)+'</td><td>'+_reportMoney(bill.drinks_fee)+'</td><td class="report-total-cell">'+_reportMoney(bill.total)+'</td><td>'+billingPaymentHtml(bill)+'</td><td>'+member+'</td><td>'+escapeHtml(bill.notes||"-")+'</td></tr>';
   }).join("");
 }
 
@@ -1363,7 +1363,7 @@ function inventoryStockText(item){
 
 function renderInventory(){
   const tb=document.querySelector("#inventoryTable tbody");
-  if(!inventoryData.length){tb.innerHTML='<tr><td colspan="9" class="empty-hint">暂无库存</td></tr>';return;}
+  if(!inventoryData.length){tb.innerHTML='<tr><td colspan="10" class="empty-hint">暂无库存</td></tr>';return;}
   tb.innerHTML=inventoryData.map(i=>{
     const unit=i.unit_name||inventoryUnitFor(i.category);
     const caseSize=Number(i.case_size||0);
@@ -1372,7 +1372,10 @@ function renderInventory(){
     const casePrice=hasCase?Number(i.case_price||0).toFixed(2):"-";
     const low=inventoryTracksStock(i)&&Number(i.stock||0)<=Number(i.low_stock??5);
     const linkage=inventoryTracksStock(i)?"":"<div class=\"cell-note\">手动维护</div>";
-    return '<tr><td>'+escapeHtml(i.category)+'</td><td>'+escapeHtml(i.name)+'</td><td>'+unit+'</td><td>'+Number(i.unit_price||0).toFixed(2)+'</td><td>'+caseSpec+'</td><td>'+casePrice+'</td><td class="admin-only" style="display:none;">'+Number(i.cost_price||0).toFixed(2)+'</td><td style="'+(low?'color:var(--danger);font-weight:700;':'')+'">'+inventoryStockText(i)+linkage+'</td><td><button class="btn btn-xs btn-outline" onclick="showEditInventoryModal('+i.id+')">编辑</button> <button class="btn btn-xs btn-danger del-btn" style="display:none;" onclick="deleteInventory('+i.id+')">删除</button></td></tr>';
+    const storedText=i.category==="酒水"
+      ?'<span class="stored-stock-total">总计 '+Number(i.stored_quantity||0)+escapeHtml(unit)+'</span>'
+      :'-';
+    return '<tr><td>'+escapeHtml(i.category)+'</td><td>'+escapeHtml(i.name)+'</td><td>'+unit+'</td><td>'+Number(i.unit_price||0).toFixed(2)+'</td><td>'+caseSpec+'</td><td>'+casePrice+'</td><td class="admin-only" style="display:none;">'+Number(i.cost_price||0).toFixed(2)+'</td><td style="'+(low?'color:var(--danger);font-weight:700;':'')+'">'+inventoryStockText(i)+linkage+'</td><td>'+storedText+'</td><td><button class="btn btn-xs btn-outline" onclick="showEditInventoryModal('+i.id+')">编辑</button> <button class="btn btn-xs btn-danger del-btn" style="display:none;" onclick="deleteInventory('+i.id+')">删除</button></td></tr>';
   }).join("");
   applyAdminToolsVisibility();
 }
@@ -1537,18 +1540,34 @@ async function deleteStaff(staffId){
 function drinkUnitLabel(drink){return drink.unit_label||(drink.sale_unit==="case"?"箱":"瓶");}
 function drinkSummaryLine(drink){const label=drinkUnitLabel(drink),price=Number(drink.unit_price||0),subtotal=Number(drink.qty||0)*price,prefix=drink.source==="package"?"[套餐] ":"";return prefix+drink.item_name+" × "+drink.qty+label+" @"+price.toFixed(2)+" = "+subtotal.toFixed(2);}
 function renderSettleDrinkSummary(drinks){document.getElementById("settleDrinksSummary").innerHTML=drinks.length?drinks.map(drinkSummaryLine).join("<br>"):"暂无";}
+function billingPaymentHtml(bill){
+  const payments=bill.payment_breakdown||[];
+  if(!payments.length)return escapeHtml(bill.payment_method||"-");
+  return '<div class="billing-payment-list">'+payments.map(item=>
+    '<div class="billing-payment-item"><span>'+escapeHtml(item.method||"-")+'</span><strong>'+_reportMoney(item.amount)+'</strong></div>'
+  ).join("")+'</div>';
+}
+
+function billingDrinkListHtml(drinks){
+  if(!drinks||!drinks.length)return "-";
+  return '<div class="history-drink-list">'+drinks.map(drink=>{
+    const prefix=drink.source==="package"?'<span class="cell-note">套餐</span> ':"";
+    return '<div>'+prefix+escapeHtml(drink.item_name||"-")+' × '+Number(drink.qty||0)+escapeHtml(drinkUnitLabel(drink))+'</div>';
+  }).join("")+'</div>';
+}
 async function fetchActiveBilling(){try{const r=await fetch(API.billingActive);const j=await r.json();if(j.code===0){activeBillingData=j.data;renderActiveBilling(activeBillingData);}}catch(e){}}
 
 function renderActiveBilling(bills){
   const tb=document.querySelector("#billingTable tbody");
-  if(!bills.length){tb.innerHTML='<tr><td colspan="7" class="empty-hint">\u6682\u65e0\u5f00\u53f0\u8d26\u5355</td></tr>';return;}
+  if(!bills.length){tb.innerHTML='<tr><td colspan="8" class="empty-hint">\u6682\u65e0\u5f00\u53f0\u8d26\u5355</td></tr>';return;}
   tb.innerHTML=bills.map(b=>{
     const ct=b.customer_type==="retail"?"\u6563\u6237":("\u4f1a\u5458(id="+b.member_id+")");
     const received=b.package_id===null||b.package_id===undefined
       ?'<span style="color:var(--text-dim);">\u672a\u4fdd\u5b58</span>'
       :'<strong style="color:var(--accent);">'+Number(b.total||0).toFixed(2)+'</strong>';
     const openTime=b.open_at?String(b.open_at).replace("T"," ").substring(0,19):"-";
-    return '<tr><td>'+b.room_no+'</td><td class="cell-time">'+openTime+'</td><td>'+(b.duration_minutes||0)+'</td><td>'+Number(b.drinks_fee||0).toFixed(2)+'</td><td>'+received+'</td><td>'+ct+'</td><td><button class="btn btn-xs btn-accent" onclick="showSettle('+b.id+')">\u7ed3\u8d26</button></td></tr>';
+    const drinkDetails=billingDrinkListHtml(b.drinks);
+    return '<tr><td>'+b.room_no+'</td><td class="cell-time">'+openTime+'</td><td>'+(b.duration_minutes||0)+'</td><td>'+Number(b.drinks_fee||0).toFixed(2)+'</td><td>'+drinkDetails+'</td><td>'+received+'</td><td>'+ct+'</td><td><button class="btn btn-xs btn-accent" onclick="showSettle('+b.id+')">结账</button></td></tr>';
   }).join("");
 }
 
@@ -1601,12 +1620,14 @@ function showSettle(billingId){
 
 
 
-    document.getElementById("settlePayment").value=bill.payment_method||(bill.customer_type!=="retail"?"\u4f1a\u5458\u4f59\u989d":"\u73b0\u91d1");
+    document.getElementById("settlePayment").value="";
+    document.querySelectorAll("[data-split-method]").forEach(input=>{input.value="0";});
+    document.getElementById("splitPaymentPanel").style.display="none";
     document.getElementById("settleNotes").value=bill.notes||"";
 
 
 
-    document.getElementById("memberSettleInfo").style.display=bill.customer_type!=="retail"||document.getElementById("settlePayment").value==="会员余额"?"block":"none";
+    document.getElementById("memberSettleInfo").style.display="none";
 
 
 
@@ -1667,6 +1688,7 @@ function updateSettleTotal(){
     document.getElementById("settleTotal").textContent="0.00";
     if(actualInput.dataset.manual!=="1")actualInput.value="0.00";
     updateSettlePriceHint();
+    updateSplitPaymentSummary();
     return;
   }
   const roomFee=_getPkgPrice(pkg);
@@ -1676,12 +1698,14 @@ function updateSettleTotal(){
   document.getElementById("settleTotal").textContent=subtotal.toFixed(2);
   if(actualInput.dataset.manual!=="1")actualInput.value=subtotal.toFixed(2);
   updateSettlePriceHint();
+  updateSplitPaymentSummary();
 }
 
 
 function onSettleActualPriceInput(){
   document.getElementById("settleActualTotal").dataset.manual="1";
   updateSettlePriceHint();
+  updateSplitPaymentSummary();
 }
 
 
@@ -1716,12 +1740,29 @@ function getSettlementPricePayload(){
 }
 
 
+function collectPaymentSplits(){
+  return Array.from(document.querySelectorAll("[data-split-method]")).map(input=>({
+    payment_method:input.dataset.splitMethod,
+    amount:Math.round((parseFloat(input.value)||0)*100)/100
+  })).filter(item=>item.amount>0);
+}
+
+function updateSplitPaymentSummary(){
+  const panel=document.getElementById("splitPaymentPanel");
+  if(!panel)return;
+  const splitTotal=Math.round(collectPaymentSplits().reduce((sum,item)=>sum+item.amount,0)*100)/100;
+  const actual=parseFloat(document.getElementById("settleActualTotal").value)||0;
+  const difference=Math.round((actual-splitTotal)*100)/100;
+  document.getElementById("splitPaymentTotal").textContent=_reportMoney(splitTotal);
+  document.getElementById("splitPaymentDifferenceLabel").textContent=difference>=0?"还差":"超出";
+  document.getElementById("splitPaymentRemaining").textContent=_reportMoney(Math.abs(difference));
+}
+
 function onSettlePaymentChange(){
-
   const v=document.getElementById("settlePayment").value;
-
+  document.getElementById("splitPaymentPanel").style.display=v==="组合支付"?"block":"none";
   document.getElementById("memberSettleInfo").style.display=v==="会员余额"?"block":"none";
-
+  updateSplitPaymentSummary();
 }
 
 function lookupSettleMember(){
@@ -1761,9 +1802,10 @@ async function saveSettlementDraft(){
   const packageId=parseInt(document.getElementById("settlePackage").value);
   if(!packageId){alert("请选择套餐");return;}
   const pricing=getSettlementPricePayload();if(!pricing)return;
+  const selectedPayment=document.getElementById("settlePayment").value;
   const data={
     package_id:packageId,
-    payment_method:document.getElementById("settlePayment").value,
+    payment_method:selectedPayment==="组合支付"?null:(selectedPayment||null),
     actual_total:pricing.actual_total,
     notes:pricing.notes
   };
@@ -1801,12 +1843,18 @@ async function confirmSettle(){
 
 
   const payment=document.getElementById("settlePayment").value;
+  if(!payment){alert("请选择支付方式");document.getElementById("settlePayment").focus();return;}
 
 
 
   const pricing=getSettlementPricePayload();if(!pricing)return;
 
-
+  const paymentSplits=payment==="组合支付"?collectPaymentSplits():[];
+  if(payment==="组合支付"){
+    if(paymentSplits.length<2){alert("组合支付至少填写两种支付方式的金额");return;}
+    const splitTotal=Math.round(paymentSplits.reduce((sum,item)=>sum+item.amount,0)*100)/100;
+    if(Math.abs(splitTotal-pricing.actual_total)>=0.01){alert("组合支付合计必须等于实收金额，当前合计："+splitTotal.toFixed(2));return;}
+  }
 
   let mp="";
 
@@ -1816,7 +1864,7 @@ async function confirmSettle(){
 
 
 
-  try{const r=await fetch(API.settle,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({billing_id:currentBilling.id,package_id:pkgId,payment_method:payment,actual_total:pricing.actual_total,member_phone:document.getElementById("settleMemberPhone").value,member_password:mp,notes:pricing.notes})});const j=await r.json();if(j.code===0){const msg="结账成功！总计："+j.total.toFixed(2);alert(msg);hideSettle();fetchActiveBilling();fetchRooms();if(activeTab==="members")fetchMembers();fetchBillingHistory();}else alert("结账失败: "+(j.detail||"unknown"));}
+  try{const r=await fetch(API.settle,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({billing_id:currentBilling.id,package_id:pkgId,payment_method:payment==="组合支付"?null:payment,payment_splits:paymentSplits,actual_total:pricing.actual_total,member_phone:document.getElementById("settleMemberPhone").value,member_password:mp,notes:pricing.notes})});const j=await r.json();if(j.code===0){const msg="结账成功！总计："+j.total.toFixed(2);alert(msg);hideSettle();fetchActiveBilling();fetchRooms();if(activeTab==="members")fetchMembers();fetchBillingHistory();}else alert("结账失败: "+(j.detail||"unknown"));}
 
 
 
@@ -1981,7 +2029,7 @@ function renderBillingHistory(bills){
       return '<div class="history-drink-item"><span>'+escapeHtml(item.item_name||"-")+' × '+qty+unit+'</span><small>'+priceLabel+'</small></div>';
     }).join("")+'</div>':"-";
     const actions='<button class="btn btn-xs btn-outline admin-only" style="display:none;" onclick="showBillingHistoryModal('+b.id+')">修改</button> <button class="btn btn-xs btn-danger admin-only" style="display:none;" onclick="deleteBilling('+b.id+')">删除</button>';
-    return '<tr><td>'+escapeHtml(b.room_no||"-")+'</td><td class="cell-time">'+openTime+'</td><td class="cell-time">'+closeTime+'</td><td>'+Number(b.room_fee||0).toFixed(2)+'</td><td>'+Number(b.drinks_fee||0).toFixed(2)+'</td><td>'+drinkDetails+'</td><td>'+Number(b.total||0).toFixed(2)+'</td><td>'+escapeHtml(b.payment_method||"-")+'</td><td>'+member+'</td><td>'+escapeHtml(b.notes||"-")+'</td><td class="del-col" style="display:none;">'+actions+'</td></tr>';
+    return '<tr><td>'+escapeHtml(b.room_no||"-")+'</td><td class="cell-time">'+openTime+'</td><td class="cell-time">'+closeTime+'</td><td>'+Number(b.room_fee||0).toFixed(2)+'</td><td>'+Number(b.drinks_fee||0).toFixed(2)+'</td><td>'+drinkDetails+'</td><td>'+Number(b.total||0).toFixed(2)+'</td><td>'+billingPaymentHtml(b)+'</td><td>'+member+'</td><td>'+escapeHtml(b.notes||"-")+'</td><td class="del-col" style="display:none;">'+actions+'</td></tr>';
   }).join("");
   applyAdminToolsVisibility();
 }

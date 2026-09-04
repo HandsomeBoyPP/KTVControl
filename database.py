@@ -177,6 +177,15 @@ def init_db():
             status TEXT DEFAULT 'open',
             created_at TEXT DEFAULT (datetime('now', 'localtime'))
         );
+        CREATE TABLE IF NOT EXISTS billing_payments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            billing_id INTEGER NOT NULL,
+            payment_method TEXT NOT NULL,
+            amount REAL NOT NULL,
+            created_at TEXT DEFAULT (datetime('now', 'localtime')),
+            FOREIGN KEY (billing_id) REFERENCES billing_records(id) ON DELETE CASCADE,
+            UNIQUE (billing_id, payment_method)
+        );
         CREATE TABLE IF NOT EXISTS drink_orders (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             billing_id INTEGER NOT NULL,
