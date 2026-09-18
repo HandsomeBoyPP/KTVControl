@@ -56,7 +56,7 @@ const API = {
 
   operationLogs: "/api/operation-logs", adminVerify: "/api/admin/verify",
 
-  dailyReport: "/api/reports/daily", monthlyReport: "/api/reports/monthly", recordsVerify: "/api/records/verify",
+  dailyReport: "/api/reports/daily", monthlyReport: "/api/reports/monthly", commissionReport: "/api/reports/commissions", recordsVerify: "/api/records/verify",
 
 
 
@@ -86,6 +86,7 @@ let pollingTimers=[], countdownTimers={};
 
 let adminToolsVisible=false, adminSessionPassword="";
 let recordsVisible=false, recordsSessionPassword="";
+let commissionRequestId=0;
 let editingRechargeLogId=null, editingBillingHistoryId=null;
 let currentReportView="daily";
 
@@ -98,6 +99,12 @@ function applyRecordsVisibility(){
   document.querySelectorAll(".records-access-only").forEach(button=>{
     button.style.display=recordsVisible?"":"none";
   });
+  if(!recordsVisible){
+    commissionRequestId++;
+    clearCommissionReport("请按 Ctrl+\\ 验证记录查看密码");
+    const select=document.getElementById("commissionStaff");
+    if(select)select.innerHTML='<option value="0">全部人员</option>';
+  }
 }
 
 async function confirmRecordsAccess(){
@@ -113,7 +120,7 @@ async function confirmRecordsAccess(){
     applyRecordsVisibility();
     closeModal("recordsAccessModal");
     input.value="";
-    switchTab("reports");
+    if(activeTab!=="staff")switchTab("reports");
   }catch(e){alert("验证失败: "+e);}
 }
 
@@ -281,7 +288,7 @@ document.addEventListener("keydown",function(e){
     recordsVisible=false;
     recordsSessionPassword="";
     applyRecordsVisibility();
-    if(["reports","recharges","logs"].includes(activeTab))switchTab("rooms");
+    if(["reports","recharges","logs","commissions"].includes(activeTab))switchTab("rooms");
     return;
   }
   const input=document.getElementById("recordsAccessPassword");
@@ -326,6 +333,7 @@ function clearPolling(){pollingTimers.forEach(clearInterval);pollingTimers=[];}
 function addPolling(fn, interval){pollingTimers.push(setInterval(fn, interval));}
 
 function switchTab(tab){
+  if(tab==="commissions"&&!recordsVisible)tab="rooms";
   activeTab=tab;
   document.querySelectorAll(".tab-btn").forEach(b=>b.classList.toggle("active",b.dataset.tab===tab));
   document.querySelectorAll(".tab-panel").forEach(p=>p.classList.toggle("active",p.id==="tab-"+tab));
@@ -340,6 +348,10 @@ function switchTab(tab){
     fetchActiveBilling();fetchInventory();fetchPackages();addPolling(fetchActiveBilling,10000);
   }else if(tab==="reports"){
     initDailyReport();
+  }else if(tab==="commissions"){
+    const input=document.getElementById("commissionMonth");
+    if(!input.value)input.value=_currentBusinessDate().substring(0,7);
+    fetchCommissionReport();
   }else if(tab==="packages"){
     fetchPackages();fetchInventory();
   }else if(tab==="inventory"){
@@ -359,6 +371,95 @@ function switchTab(tab){
 // ================================================================
 // Daily Business Report
 // ================================================================
+
+function switchCommissionView(view){
+  const people=view!=="orders";
+  document.getElementById("commissionPeoplePanel").style.display=people?"":"none";
+  document.getElementById("commissionOrdersPanel").style.display=people?"none":"";
+  ["People","Orders"].forEach(name=>{
+    const active=(name==="People")===people,button=document.getElementById("commission"+name+"Tab");
+    button.classList.toggle("active",active);button.setAttribute("aria-selected",String(active));
+  });
+}
+
+function clearCommissionReport(message){
+  const performance=document.getElementById("commissionPerformance");
+  if(!performance)return;
+  performance.textContent="—";
+  document.getElementById("commissionTotal").textContent="—";
+  document.getElementById("commissionBillCount").textContent="—";
+  document.getElementById("commissionUnassignedHint").textContent="";
+  document.getElementById("commissionWarning").style.display="none";
+  document.getElementById("commissionWarning").textContent="";
+  document.getElementById("commissionRange").textContent="按开台时间统计，营业日早上 6 点切换";
+  document.querySelector("#commissionPeopleTable tbody").innerHTML='<tr><td colspan="9" class="empty-hint">'+escapeHtml(message)+'</td></tr>';
+  document.querySelector("#commissionOrdersTable tbody").innerHTML='<tr><td colspan="8" class="empty-hint">'+escapeHtml(message)+'</td></tr>';
+}
+
+function onCommissionMonthChange(){
+  document.getElementById("commissionStaff").value="0";
+  fetchCommissionReport();
+}
+
+function setCommissionCurrentMonth(){
+  document.getElementById("commissionMonth").value=_currentBusinessDate().substring(0,7);
+  onCommissionMonthChange();
+}
+
+function changeCommissionMonth(offset){
+  const input=document.getElementById("commissionMonth"),parts=(input.value||_currentBusinessDate().substring(0,7)).split("-").map(Number);
+  const date=new Date(parts[0],parts[1]-1+offset,1);
+  input.value=_localDateText(date).substring(0,7);
+  onCommissionMonthChange();
+}
+
+async function fetchCommissionReport(){
+  if(!recordsVisible||!recordsSessionPassword){clearCommissionReport("请先验证记录查看密码");return;}
+  const requestId=++commissionRequestId,input=document.getElementById("commissionMonth");
+  input.value=input.value||_currentBusinessDate().substring(0,7);
+  const staffId=document.getElementById("commissionStaff").value||"0";
+  clearCommissionReport("正在加载...");
+  try{
+    const response=await fetch(API.commissionReport+"?month="+encodeURIComponent(input.value)+"&staff_id="+encodeURIComponent(staffId),{headers:{"X-Records-Password":recordsSessionPassword}}),json=await response.json();
+    if(requestId!==commissionRequestId||!recordsVisible)return;
+    if(!response.ok||json.code!==0)throw new Error(json.detail||"提成加载失败");
+    renderCommissionReport(json.data,staffId);
+  }catch(e){
+    if(requestId===commissionRequestId&&recordsVisible)clearCommissionReport("提成加载失败："+e.message);
+  }
+}
+
+function commissionTierHtml(person,key){
+  const rule=person.rule||{},marketing=rule.type==="marketing";
+  if((key==="fixed"&&rule.type!=="manager")||(key!=="fixed"&&!marketing))return "—";
+  let range="全部业绩";
+  if(key==="first")range="前 "+rule.first_limit+" 元部分";
+  if(key==="second")range="超过 "+rule.first_limit+" 至 "+rule.second_limit+" 元部分";
+  if(key==="third")range="超过 "+rule.second_limit+" 元部分";
+  return '<strong>'+_reportMoney(person[key+"_commission"])+'</strong><div class="cell-note">'+escapeHtml(range)+'</div><div class="cell-note">'+_reportMoney(person[key+"_amount"])+" × "+Number(rule[key+"_rate"])+"%</div>";
+}
+
+function renderCommissionReport(report,selectedStaff="0"){
+  const summary=report.summary||{};
+  document.getElementById("commissionPerformance").textContent=_reportMoney(summary.performance_total);
+  document.getElementById("commissionTotal").textContent=_reportMoney(summary.commission_total);
+  document.getElementById("commissionBillCount").textContent=Number(summary.bill_count||0)+" 单";
+  document.getElementById("commissionRange").textContent="统计范围："+report.start_at+" 至 "+report.end_at+"（不含结束时间）";
+  const select=document.getElementById("commissionStaff");
+  select.innerHTML='<option value="0">全部人员</option>'+(report.staff_options||[]).map(person=>'<option value="'+Number(person.id)+'">'+escapeHtml(person.name)+(person.status!=="在职"?"（"+escapeHtml(person.status)+"）":"")+'</option>').join("");
+  select.value=selectedStaff;
+  document.getElementById("commissionUnassignedHint").textContent="本月全店另有 "+Number(report.unassigned_count||0)+" 单无归属或未归属，不计入提成；需要时可在结账记录的隐藏编辑功能中补选人员。";
+  const people=report.people||[],warning=document.getElementById("commissionWarning"),changed=people.filter(person=>person.rule_changed);
+  warning.style.display=changed.length?"":"none";
+  warning.textContent=changed.length?"请核对："+changed.map(person=>person.name).join("、")+"当月订单保存的规则有变化，当前暂按各自最后一笔结账保存的规则计算整月提成。":"";
+  document.querySelector("#commissionPeopleTable tbody").innerHTML=people.length?people.map(person=>
+    '<tr><td>'+escapeHtml(person.name)+(person.status!=="在职"?'<div class="cell-note">'+escapeHtml(person.status)+'</div>':'')+'</td><td title="'+escapeHtml(staffCommissionText(person.rule))+'">'+escapeHtml(person.rule.type==="marketing"?"营销 · 阶梯分段":person.rule.type==="manager"?"经理 · 固定比例":"不计算")+'<div class="cell-note">'+escapeHtml(person.rule_source)+(person.rule_changed?' · 规则有变化':'')+'</div></td><td>'+_reportMoney(person.performance_total)+'</td><td>'+Number(person.bill_count||0)+'</td><td>'+commissionTierHtml(person,"first")+'</td><td>'+commissionTierHtml(person,"second")+'</td><td>'+commissionTierHtml(person,"third")+'</td><td>'+commissionTierHtml(person,"fixed")+'</td><td class="report-total-cell">'+_reportMoney(person.commission_total)+'</td></tr>'
+  ).join(""):'<tr><td colspan="9" class="empty-hint">暂无营销或经理业绩，先在人员管理配置提成类型，并在结账时选择归属人员</td></tr>';
+  const orders=report.orders||[];
+  document.querySelector("#commissionOrdersTable tbody").innerHTML=orders.length?orders.map(order=>
+    '<tr><td>#'+Number(order.id)+'</td><td>'+escapeHtml(order.room_no||"-")+'</td><td class="cell-time">'+escapeHtml(order.open_at||order.close_at||"-")+'</td><td class="cell-time">'+escapeHtml(order.close_at||"-")+'</td><td>'+escapeHtml(order.staff_name||"-")+'</td><td class="report-total-cell">'+_reportMoney(order.total)+'</td><td>'+escapeHtml(order.payment_method||"-")+'</td><td>'+escapeHtml(order.notes||"-")+'</td></tr>'
+  ).join(""):'<tr><td colspan="8" class="empty-hint">该月份暂无关联的已结账订单</td></tr>';
+}
 
 function _localDateText(date){
   const year=date.getFullYear();
@@ -1466,11 +1567,42 @@ async function fetchStaff(){
   }catch(e){}
 }
 
+const staffCommissionDefaults={type:"none",first_limit:10000,second_limit:20000,first_rate:15,second_rate:20,third_rate:25,fixed_rate:20};
+const staffCommissionFields={first_limit:"staffFirstLimit",second_limit:"staffSecondLimit",first_rate:"staffFirstRate",second_rate:"staffSecondRate",third_rate:"staffThirdRate",fixed_rate:"staffFixedRate"};
+
+function staffCommissionText(rule){
+  const r={...staffCommissionDefaults,...(rule||{})};
+  if(r.type==="manager")return "经理：全部业绩 × "+r.fixed_rate+"%";
+  if(r.type!=="marketing")return "不计算提成";
+  return "营销（阶梯分段）\n前 "+r.first_limit+" 元部分 × "+r.first_rate+"%\n超过 "+r.first_limit+" 至 "+r.second_limit+" 元部分 × "+r.second_rate+"%\n超过 "+r.second_limit+" 元部分 × "+r.third_rate+"%";
+}
+
+function readStaffCommissionRule(){
+  const rule={type:document.getElementById("staffCommissionType").value};
+  Object.entries(staffCommissionFields).forEach(([field,id])=>{rule[field]=parseFloat(document.getElementById(id).value);});
+  return rule;
+}
+
+function updateStaffCommissionFields(){
+  const rule=readStaffCommissionRule();
+  document.getElementById("staffMarketingRule").hidden=rule.type!=="marketing";
+  document.getElementById("staffManagerRule").hidden=rule.type!=="manager";
+  document.getElementById("staffCommissionHint").textContent=staffCommissionText(rule)+(rule.type==="marketing"?"\n按个人当月累计业绩分段计算，不是全部业绩套最高比例。":"");
+}
+
+function loadStaffCommissionRule(rule){
+  const r={...staffCommissionDefaults,...(rule||{})};
+  document.getElementById("staffCommissionType").value=r.type;
+  Object.entries(staffCommissionFields).forEach(([field,id])=>{document.getElementById(id).value=r[field];});
+  updateStaffCommissionFields();
+}
+
 function renderStaff(){
   const tb=document.querySelector("#staffTable tbody");
-  if(!staffData.length){tb.innerHTML='<tr><td colspan="7" class="empty-hint">&#26242;&#26080;&#24215;&#20869;&#20154;&#21592;</td></tr>';return;}
-  tb.innerHTML=staffData.map(s=>'<tr><td>'+s.name+'</td><td>'+(s.phone||'-')+'</td><td>'+s.position+'</td><td><span class="status-badge '+(s.status==="\u5728\u804c"?'active':'inactive')+'">'+s.status+'</span></td><td class="admin-only" style="display:none;">'+Number(s.salary||0).toFixed(2)+'</td><td>'+(s.notes||'-')+'</td><td><button class="btn btn-xs btn-outline" onclick="showEditStaffModal('+s.id+')">&#32534;&#36753;</button> <button class="btn btn-xs btn-danger del-btn" style="display:none;" onclick="deleteStaff('+s.id+')">&#21024;&#38500;</button></td></tr>').join("");
+  if(!staffData.length){tb.innerHTML='<tr><td colspan="8" class="empty-hint">&#26242;&#26080;&#24215;&#20869;&#20154;&#21592;</td></tr>';return;}
+  tb.innerHTML=staffData.map(s=>'<tr><td>'+escapeHtml(s.name)+'</td><td>'+escapeHtml(s.phone||'-')+'</td><td>'+escapeHtml(s.position)+'</td><td><span class="status-badge '+(s.status==="\u5728\u804c"?'active':'inactive')+'">'+escapeHtml(s.status)+'</span></td><td class="admin-only" style="display:none;">'+Number(s.salary||0).toFixed(2)+'</td><td class="records-access-only" style="display:none;white-space:pre-line;">'+escapeHtml(staffCommissionText(s.commission_rule))+'</td><td>'+escapeHtml(s.notes||'-')+'</td><td><button class="btn btn-xs btn-outline" onclick="showEditStaffModal('+s.id+')">&#32534;&#36753;</button> <button class="btn btn-xs btn-danger del-btn" style="display:none;" onclick="deleteStaff('+s.id+')">&#21024;&#38500;</button></td></tr>').join("");
   applyAdminToolsVisibility();
+  applyRecordsVisibility();
 }
 
 
@@ -1483,8 +1615,10 @@ function showStaffModal(){
   document.getElementById("staffStatus").value="\u5728\u804c";
   document.getElementById("staffSalary").value="0";
   document.getElementById("staffNotes").value="";
+  loadStaffCommissionRule();
   showModal("staffModal");
   applyAdminToolsVisibility();
+  applyRecordsVisibility();
 }
 
 
@@ -1498,8 +1632,10 @@ function showEditStaffModal(staffId){
   document.getElementById("staffStatus").value=s.status;
   document.getElementById("staffSalary").value=Number(s.salary||0);
   document.getElementById("staffNotes").value=s.notes||"";
+  loadStaffCommissionRule(s.commission_rule);
   showModal("staffModal");
   applyAdminToolsVisibility();
+  applyRecordsVisibility();
 }
 
 
@@ -1507,6 +1643,12 @@ async function confirmStaff(){
   const staffId=document.getElementById("editStaffId").value;
   const data={name:document.getElementById("staffName").value.trim(),phone:document.getElementById("staffPhone").value.trim()||null,position:document.getElementById("staffPosition").value.trim(),status:document.getElementById("staffStatus").value,notes:document.getElementById("staffNotes").value.trim()||null};
   if(adminToolsVisible)data.salary=parseFloat(document.getElementById("staffSalary").value)||0;
+  if(recordsVisible){
+    const rule=readStaffCommissionRule();
+    if(!Number.isFinite(rule.first_limit)||!Number.isFinite(rule.second_limit)||rule.first_limit<=0||rule.second_limit<=rule.first_limit){alert("第一档上限必须大于0，第二档上限必须大于第一档上限");return;}
+    if([rule.first_rate,rule.second_rate,rule.third_rate,rule.fixed_rate].some(rate=>!Number.isFinite(rate)||rate<0||rate>100)){alert("提成比例必须填写0到100之间的数字");return;}
+    data.commission_rule=rule;
+  }
   if(!data.name||!data.position){alert("\u8bf7\u586b\u5199\u59d3\u540d\u548c\u5c97\u4f4d");return;}
   try{
     const r=await fetch(staffId?API.staff+"/"+staffId:API.staff,{method:staffId?"PUT":"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(data)});
@@ -1572,11 +1714,34 @@ function renderActiveBilling(bills){
 }
 
 
+async function loadPerformanceStaff(){
+  const response=await fetch(API.staff),json=await response.json();
+  if(!response.ok||json.code!==0)throw new Error("业绩归属人员加载失败");
+  staffData=json.data||[];
+}
+
+function populatePerformanceStaff(selectId,bill={},history=false){
+  const select=document.getElementById(selectId);
+  const eligible=staffData.filter(person=>["marketing","manager"].includes(person.commission_rule?.type)&&(history||person.status==="在职"));
+  select.innerHTML='<option value="">-- 请选择人员或无 --</option><option value="0">无</option>'+eligible.map(person=>'<option value="'+person.id+'">'+escapeHtml(person.name)+'（'+(person.commission_rule.type==="manager"?"经理":"营销")+(person.status!=="在职"?" · 已离职":"")+'）</option>').join("");
+  const id=bill.performance_staff_id;
+  if(history&&id>0&&!eligible.some(person=>person.id===Number(id))){
+    const option=document.createElement("option");option.value=String(id);option.textContent=(bill.performance_staff_name||"历史人员")+"（历史归属）";select.appendChild(option);
+  }
+  select.value=id===null||id===undefined?(history?"0":""):String(id);
+}
+
+function readPerformanceStaff(selectId){
+  const select=document.getElementById(selectId);
+  if(select.value===""){alert("请选择业绩归属人员，没有归属也必须选择无");select.focus();return null;}
+  return Number(select.value);
+}
+
 function showSettle(billingId){
 
 
 
-  fetch(API.billingActive).then(r=>r.json()).then(json=>{
+  fetch(API.billingActive).then(r=>r.json()).then(async json=>{
 
 
 
@@ -1587,6 +1752,8 @@ function showSettle(billingId){
 
 
     currentBilling=bill;
+    await loadPerformanceStaff();
+    populatePerformanceStaff("settlePerformanceStaff",bill);
 
 
 
@@ -1620,14 +1787,17 @@ function showSettle(billingId){
 
 
 
-    document.getElementById("settlePayment").value="";
-    document.querySelectorAll("[data-split-method]").forEach(input=>{input.value="0";});
-    document.getElementById("splitPaymentPanel").style.display="none";
+    const savedPayments=bill.payment_breakdown||[];
+    const savedIsCombo=savedPayments.length>1;
+    document.getElementById("settlePayment").value=savedIsCombo?"组合支付":(bill.payment_method||"");
+    document.querySelectorAll("[data-split-method]").forEach(input=>{
+      const saved=savedPayments.find(item=>item.method===input.dataset.splitMethod);
+      input.value=saved?Number(saved.amount||0).toFixed(2):"0";
+    });
+    document.getElementById("splitPaymentPanel").style.display=savedIsCombo?"block":"none";
     document.getElementById("settleNotes").value=bill.notes||"";
 
-
-
-    document.getElementById("memberSettleInfo").style.display="none";
+    document.getElementById("memberSettleInfo").style.display=bill.payment_method==="会员余额"?"block":"none";
 
 
 
@@ -1799,13 +1969,22 @@ function lookupSettleMember(){
 
 async function saveSettlementDraft(){
   if(!currentBilling)return;
+  const performanceStaffId=readPerformanceStaff("settlePerformanceStaff");if(performanceStaffId===null)return;
   const packageId=parseInt(document.getElementById("settlePackage").value);
   if(!packageId){alert("请选择套餐");return;}
   const pricing=getSettlementPricePayload();if(!pricing)return;
   const selectedPayment=document.getElementById("settlePayment").value;
+  const paymentSplits=selectedPayment==="组合支付"?collectPaymentSplits():[];
+  if(selectedPayment==="组合支付"){
+    if(paymentSplits.length<2){alert("组合支付至少填写两种支付方式的金额");return;}
+    const splitTotal=Math.round(paymentSplits.reduce((sum,item)=>sum+item.amount,0)*100)/100;
+    if(Math.abs(splitTotal-pricing.actual_total)>=0.01){alert("组合支付合计必须等于实收金额，当前合计："+splitTotal.toFixed(2));return;}
+  }
   const data={
     package_id:packageId,
+    performance_staff_id:performanceStaffId,
     payment_method:selectedPayment==="组合支付"?null:(selectedPayment||null),
+    payment_splits:paymentSplits,
     actual_total:pricing.actual_total,
     notes:pricing.notes
   };
@@ -1831,6 +2010,7 @@ async function confirmSettle(){
 
 
   if(!currentBilling)return;
+  const performanceStaffId=readPerformanceStaff("settlePerformanceStaff");if(performanceStaffId===null)return;
 
 
 
@@ -1864,7 +2044,7 @@ async function confirmSettle(){
 
 
 
-  try{const r=await fetch(API.settle,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({billing_id:currentBilling.id,package_id:pkgId,payment_method:payment==="组合支付"?null:payment,payment_splits:paymentSplits,actual_total:pricing.actual_total,member_phone:document.getElementById("settleMemberPhone").value,member_password:mp,notes:pricing.notes})});const j=await r.json();if(j.code===0){const msg="结账成功！总计："+j.total.toFixed(2);alert(msg);hideSettle();fetchActiveBilling();fetchRooms();if(activeTab==="members")fetchMembers();fetchBillingHistory();}else alert("结账失败: "+(j.detail||"unknown"));}
+  try{const r=await fetch(API.settle,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({billing_id:currentBilling.id,package_id:pkgId,performance_staff_id:performanceStaffId,payment_method:payment==="组合支付"?null:payment,payment_splits:paymentSplits,actual_total:pricing.actual_total,member_phone:document.getElementById("settleMemberPhone").value,member_password:mp,notes:pricing.notes})});const j=await r.json();if(j.code===0){const msg="结账成功！总计："+j.total.toFixed(2);alert(msg);hideSettle();fetchActiveBilling();fetchRooms();if(activeTab==="members")fetchMembers();fetchBillingHistory();}else alert("结账失败: "+(j.detail||"unknown"));}
 
 
 
@@ -1989,7 +2169,7 @@ async function fetchBillingHistory(){
     document.getElementById("historyRange").textContent="统计范围："+json.start_at+" 至 "+json.end_at+"（不含结束时间）";
     renderBillingHistory(billingHistoryData);
   }catch(e){
-    document.querySelector("#historyTable tbody").innerHTML='<tr><td colspan="11" class="empty-hint">记录加载失败：'+escapeHtml(e.message)+'</td></tr>';
+    document.querySelector("#historyTable tbody").innerHTML='<tr><td colspan="12" class="empty-hint">记录加载失败：'+escapeHtml(e.message)+'</td></tr>';
   }
 }
 
@@ -2015,7 +2195,7 @@ function _historyTimeValue(value){
 
 function renderBillingHistory(bills){
   const tb=document.querySelector("#historyTable tbody");
-  if(!bills.length){tb.innerHTML='<tr><td colspan="11" class="empty-hint">暂无记录</td></tr>';return;}
+  if(!bills.length){tb.innerHTML='<tr><td colspan="12" class="empty-hint">暂无记录</td></tr>';return;}
   tb.innerHTML=bills.map(b=>{
     const openTime=b.open_at?String(b.open_at).replace("T"," ").substring(0,19):(b.close_at?String(b.close_at).replace("T"," ").substring(0,19):"-");
     const closeTime=b.close_at?String(b.close_at).replace("T"," ").substring(0,19):"-";
@@ -2029,7 +2209,7 @@ function renderBillingHistory(bills){
       return '<div class="history-drink-item"><span>'+escapeHtml(item.item_name||"-")+' × '+qty+unit+'</span><small>'+priceLabel+'</small></div>';
     }).join("")+'</div>':"-";
     const actions='<button class="btn btn-xs btn-outline admin-only" style="display:none;" onclick="showBillingHistoryModal('+b.id+')">修改</button> <button class="btn btn-xs btn-danger admin-only" style="display:none;" onclick="deleteBilling('+b.id+')">删除</button>';
-    return '<tr><td>'+escapeHtml(b.room_no||"-")+'</td><td class="cell-time">'+openTime+'</td><td class="cell-time">'+closeTime+'</td><td>'+Number(b.room_fee||0).toFixed(2)+'</td><td>'+Number(b.drinks_fee||0).toFixed(2)+'</td><td>'+drinkDetails+'</td><td>'+Number(b.total||0).toFixed(2)+'</td><td>'+billingPaymentHtml(b)+'</td><td>'+member+'</td><td>'+escapeHtml(b.notes||"-")+'</td><td class="del-col" style="display:none;">'+actions+'</td></tr>';
+    return '<tr><td>'+escapeHtml(b.room_no||"-")+'</td><td class="cell-time">'+openTime+'</td><td class="cell-time">'+closeTime+'</td><td>'+Number(b.room_fee||0).toFixed(2)+'</td><td>'+Number(b.drinks_fee||0).toFixed(2)+'</td><td>'+drinkDetails+'</td><td>'+Number(b.total||0).toFixed(2)+'</td><td>'+billingPaymentHtml(b)+'</td><td>'+escapeHtml(b.performance_staff_name||(b.performance_staff_id===null||b.performance_staff_id===undefined?"未归属":"无"))+'</td><td>'+member+'</td><td>'+escapeHtml(b.notes||"-")+'</td><td class="del-col" style="display:none;">'+actions+'</td></tr>';
   }).join("");
   applyAdminToolsVisibility();
 }
@@ -2060,10 +2240,12 @@ function _toDateTimeInput(value){
 }
 
 
-function showBillingHistoryModal(billingId=null){
+async function showBillingHistoryModal(billingId=null){
   if(!adminToolsVisible||!adminSessionPassword){alert("请先按 Ctrl+/ 验证管理密码");return;}
   editingBillingHistoryId=billingId;
   const bill=billingId==null?null:billingHistoryData.find(item=>item.id===billingId);
+  try{await loadPerformanceStaff();}catch(e){alert(e.message);return;}
+  populatePerformanceStaff("billingHistoryPerformanceStaff",bill||{},true);
   document.getElementById("billingHistoryModalTitle").textContent=bill?"修改结账记录":"新增结账记录";
   document.getElementById("billingHistoryRoom").value=bill?.room_no||"";
   document.getElementById("billingHistoryRoomFee").value=bill?Number(bill.room_fee||0).toFixed(2):"0.00";
@@ -2081,8 +2263,10 @@ function showBillingHistoryModal(billingId=null){
 
 async function confirmBillingHistory(){
   if(!adminToolsVisible||!adminSessionPassword){alert("管理模式已关闭，请重新验证");return;}
+  const performanceStaffId=readPerformanceStaff("billingHistoryPerformanceStaff");if(performanceStaffId===null)return;
   const data={
     room_no:document.getElementById("billingHistoryRoom").value.trim(),
+    performance_staff_id:performanceStaffId,
     room_fee:parseFloat(document.getElementById("billingHistoryRoomFee").value),
     drinks_fee:parseFloat(document.getElementById("billingHistoryDrinksFee").value),
     total:parseFloat(document.getElementById("billingHistoryTotal").value),

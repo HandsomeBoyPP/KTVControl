@@ -766,6 +766,29 @@ body {
   font-weight: 700;
   white-space: nowrap;
 }
+.commission-summary-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.commission-warning {
+  margin: 14px 0;
+  padding: 12px 14px;
+  border: 1px solid var(--warning);
+  border-radius: 8px;
+  color: var(--warning);
+  font-size: 13px;
+  line-height: 1.6;
+}
+#commissionStaff {
+  max-width: 200px;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg-card);
+  color: var(--text);
+}
+#tab-commissions > .section-note { margin-bottom: 12px; line-height: 1.6; }
+#commissionPeopleTable td { white-space: nowrap; }
+@media (max-width: 700px) {
+  .commission-summary-grid { grid-template-columns: 1fr; }
+}
 .split-payment-panel {
   margin: -2px 0 14px;
   padding: 13px;

@@ -1,10 +1,12 @@
 """KTV 前台控制系统 - FastAPI 后端"""
 
 import asyncio
+import json
 import logging
 import sqlite3
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
+from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 
 from fastapi import FastAPI, Header, HTTPException
@@ -17,7 +19,7 @@ from models import (
     CloseRequest, CreatePackageRequest, DeletePackageRequest, ExtendRequest, OpenRequest,
     ExpireMemberDrinkRequest, RechargeLogWriteRequest, RechargeRequest, ResetMemberPasswordRequest, RetrieveMemberDrinkRequest, SaveBillingDraftRequest, SettlementRequest,
     StoreMemberDrinkRequest, UpdateBillingRequest, UpdateInventoryRequest, UpdateMemberRequest, UpdatePackageRequest, UpdateStaffRequest,
-    VerifyAdminRequest, VerifyMemberRequest, VerifyRecordsRequest,
+    VerifyAdminRequest, VerifyMemberRequest, VerifyRecordsRequest, StaffCommissionRule,
 )
 from scheduler import (
     cancel_auto_close, execute_device_command, ktv_get, ktv_post, restore_all_schedules,
@@ -1214,9 +1216,14 @@ async def list_staff():
     conn = get_db()
     try:
         rows = conn.execute(
-            "SELECT id, name, phone, position, status, salary, notes, created_at FROM staff ORDER BY status, id DESC"
+            "SELECT * FROM staff ORDER BY status, id DESC"
         ).fetchall()
-        return {"code": 0, "data": [dict(row) for row in rows]}
+        result = []
+        for row in rows:
+            person = dict(row)
+            person["commission_rule"] = json.loads(person.get("commission_rule") or "{}")
+            result.append(person)
+        return {"code": 0, "data": result}
     finally:
         conn.close()
 
@@ -1226,8 +1233,9 @@ async def create_staff(req: CreateStaffRequest):
     conn = get_db()
     try:
         cursor = conn.execute(
-            "INSERT INTO staff (name, phone, position, status, salary, notes) VALUES (?, ?, ?, ?, ?, ?)",
-            (req.name, req.phone, req.position, req.status, req.salary, req.notes),
+            "INSERT INTO staff (name, phone, position, status, salary, notes, commission_rule) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (req.name, req.phone, req.position, req.status, req.salary, req.notes,
+             json.dumps(req.commission_rule.model_dump(), ensure_ascii=False)),
         )
         conn.commit()
         staff_id = cursor.lastrowid
@@ -1244,12 +1252,14 @@ async def update_staff(staff_id: int, req: UpdateStaffRequest):
         if not conn.execute("SELECT id FROM staff WHERE id = ?", (staff_id,)).fetchone():
             raise HTTPException(404, "店内人员不存在")
         fields, values = [], []
-        for field in ["name", "phone", "position", "status", "salary", "notes"]:
+        for field in ["name", "phone", "position", "status", "salary", "notes", "commission_rule"]:
             if field not in req.model_fields_set:
                 continue
             value = getattr(req, field)
             if value is None and field not in {"phone", "notes"}:
                 continue
+            if field == "commission_rule":
+                value = json.dumps(value.model_dump(), ensure_ascii=False)
             fields.append(f"{field} = ?")
             values.append(value)
         if fields:
@@ -1278,6 +1288,22 @@ async def delete_staff(staff_id: int):
 
 # ---- Billing / Settlement Routes ----
 
+def _resolve_performance_staff(conn, staff_id: int, *, allow_inactive=False, existing=None):
+    """Snapshot ownership and rules; bill.total is the performance amount."""
+    if staff_id == 0:
+        return 0, None, None
+    person = conn.execute("SELECT * FROM staff WHERE id = ?", (staff_id,)).fetchone()
+    if not person:
+        if allow_inactive and existing and existing["performance_staff_id"] == staff_id:
+            return staff_id, existing["performance_staff_name"], existing["performance_commission_rule"]
+        raise HTTPException(400, "业绩归属人员不存在，请重新选择或选择无")
+    rule = json.loads(person["commission_rule"] or "{}")
+    if rule.get("type") not in {"marketing", "manager"}:
+        raise HTTPException(400, "业绩只能归属营销人员或经理")
+    if not allow_inactive and person["status"] != "在职":
+        raise HTTPException(400, "业绩归属人员已离职，请重新选择或选择无")
+    return staff_id, person["name"], json.dumps(rule, ensure_ascii=False)
+
 @app.get("/api/billing/active")
 async def list_active_billing():
     conn = get_db()
@@ -1288,6 +1314,12 @@ async def list_active_billing():
             bill = dict(r)
             drinks = conn.execute("SELECT * FROM drink_orders WHERE billing_id = ?", (r["id"],)).fetchall()
             bill["drinks"] = [dict(d) for d in drinks]
+            payments = conn.execute(
+                """SELECT payment_method AS method, amount
+                   FROM billing_payments WHERE billing_id = ? ORDER BY id""",
+                (r["id"],),
+            ).fetchall()
+            bill["payment_breakdown"] = [dict(payment) for payment in payments]
             result.append(bill)
         return {"code": 0, "data": result}
     finally:
@@ -1303,6 +1335,7 @@ async def save_billing_draft(billing_id: int, req: SaveBillingDraftRequest):
         ).fetchone()
         if not billing:
             raise HTTPException(404, "账单不存在或已结账")
+        performance_id, performance_name, performance_rule = _resolve_performance_staff(conn, req.performance_staff_id)
         package = conn.execute("SELECT * FROM packages WHERE id = ?", (req.package_id,)).fetchone()
         if not package or package["type"] != "open":
             raise HTTPException(400, "开台套餐不存在")
@@ -1312,29 +1345,63 @@ async def save_billing_draft(billing_id: int, req: SaveBillingDraftRequest):
         subtotal = round(room_fee + drinks_fee, 2)
         total, notes, price_modified = _resolve_actual_total(subtotal, req.actual_total, req.notes)
 
+        if req.payment_splits:
+            payment_breakdown = [
+                {"method": item.payment_method, "amount": round(item.amount, 2)}
+                for item in req.payment_splits
+            ]
+            split_total = round(sum(item["amount"] for item in payment_breakdown), 2)
+            if abs(split_total - total) >= 0.01:
+                raise HTTPException(
+                    400, f"组合支付合计{split_total:.2f}元，与实收金额{total:.2f}元不一致"
+                )
+            saved_payment_method = "+".join(item["method"] for item in payment_breakdown)
+        else:
+            saved_payment_method = req.payment_method
+            payment_breakdown = (
+                [{"method": saved_payment_method, "amount": total}]
+                if saved_payment_method else []
+            )
+
         conn.execute(
             """UPDATE billing_records
                SET package_id = ?, room_fee = ?, drinks_fee = ?, total = ?,
-                   discount = 0, payment_method = ?, notes = ?
+                   discount = 0, payment_method = ?, notes = ?,
+                   performance_staff_id = ?, performance_staff_name = ?, performance_commission_rule = ?
                WHERE id = ? AND status = 'open'""",
-            (req.package_id, room_fee, drinks_fee, total, req.payment_method, notes, billing_id),
+            (req.package_id, room_fee, drinks_fee, total, saved_payment_method, notes,
+             performance_id, performance_name, performance_rule, billing_id),
         )
         drinks = [dict(row) for row in conn.execute(
             "SELECT * FROM drink_orders WHERE billing_id = ? ORDER BY id", (billing_id,)
         ).fetchall()]
+        conn.execute("DELETE FROM billing_payments WHERE billing_id = ?", (billing_id,))
+        if payment_breakdown:
+            conn.executemany(
+                """INSERT INTO billing_payments (billing_id, payment_method, amount)
+                   VALUES (?, ?, ?)""",
+                [
+                    (billing_id, item["method"], item["amount"])
+                    for item in payment_breakdown
+                ],
+            )
         conn.commit()
         log_operation(
             "save_billing_draft", billing["room_no"],
             f"billing={billing_id} package={req.package_id} drinks_fee={drinks_fee} "
             f"calculated_total={subtotal} actual_total={total} price_modified={price_modified} "
-            f"payment={req.payment_method} notes={notes or ''}",
+            f"payment={payment_breakdown} performance_staff={performance_name or '无'} performance_amount={total} notes={notes or ''}",
         )
         return {
             "code": 0, "msg": "ok", "billing_id": billing_id,
             "package_id": req.package_id, "room_fee": room_fee,
             "drinks_fee": drinks_fee, "calculated_total": subtotal,
             "total": total, "price_modified": price_modified,
-            "payment_method": req.payment_method, "notes": notes, "drinks": drinks,
+            "payment_method": saved_payment_method,
+            "payment_breakdown": payment_breakdown,
+            "notes": notes, "drinks": drinks,
+            "performance_staff_id": performance_id,
+            "performance_staff_name": performance_name,
         }
     except Exception:
         conn.rollback()
@@ -1490,6 +1557,7 @@ async def settle_billing(req: SettlementRequest):
         ).fetchone()
         if not billing:
             raise HTTPException(404, "账单不存在或已结账")
+        performance_id, performance_name, performance_rule = _resolve_performance_staff(conn, req.performance_staff_id)
         pkg = conn.execute("SELECT * FROM packages WHERE id = ?", (req.package_id,)).fetchone()
         if not pkg or pkg["type"] != "open":
             raise HTTPException(400, "开台套餐不存在")
@@ -1560,12 +1628,13 @@ async def settle_billing(req: SettlementRequest):
                    cash_supplement = 0, payment_method = ?, notes = ?,
                    settlement_member_id = ?, settlement_member_name = ?,
                    settlement_member_phone = ?, member_balance_after = ?,
+                   performance_staff_id = ?, performance_staff_name = ?, performance_commission_rule = ?,
                    status = 'closed'
                WHERE id = ?""",
             (
                 req.package_id, room_fee, drinks_fee, total, payment_method, notes,
                 settlement_member_id, settlement_member_name, settlement_member_phone,
-                member_balance_after, req.billing_id,
+                member_balance_after, performance_id, performance_name, performance_rule, req.billing_id,
             ),
         )
         conn.execute("DELETE FROM billing_payments WHERE billing_id = ?", (req.billing_id,))
@@ -1591,7 +1660,7 @@ async def settle_billing(req: SettlementRequest):
             "settle_billing", room_name,
             f"结账 room_fee={room_fee} drinks_fee={drinks_fee} calculated_total={subtotal} "
             f"actual_total={total} price_modified={price_modified} payment={payment_breakdown} "
-            f"notes={notes or ''} room_kept_open=true{member_detail}",
+            f"notes={notes or ''} performance_staff={performance_name or '无'} performance_amount={total} room_kept_open=true{member_detail}",
         )
         return {
             "code": 0, "msg": "ok", "total": total, "room_fee": room_fee,
@@ -1601,6 +1670,8 @@ async def settle_billing(req: SettlementRequest):
             "notes": notes, "room_kept_open": True,
             "settlement_member_name": settlement_member_name,
             "settlement_member_phone": settlement_member_phone,
+            "performance_staff_id": performance_id,
+            "performance_staff_name": performance_name,
             "member_balance_after": member_balance_after,
         }
     except Exception:
@@ -1760,6 +1831,112 @@ def _month_business_bounds(month: str = "") -> tuple[datetime, datetime]:
     return start_at, next_month.replace(hour=6)
 
 
+def _calculate_staff_commission(amount, rule: dict) -> dict:
+    """Apply one monthly rule to cumulative performance, never per payment/order."""
+    rule = StaffCommissionRule.model_validate(rule).model_dump()
+    total = max(Decimal("0"), Decimal(str(amount))).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    segments = {"first": Decimal("0"), "second": Decimal("0"), "third": Decimal("0"), "fixed": Decimal("0")}
+    if rule["type"] == "marketing":
+        first, second = Decimal(str(rule["first_limit"])), Decimal(str(rule["second_limit"]))
+        segments["first"] = min(total, first)
+        segments["second"] = min(max(total - first, Decimal("0")), second - first)
+        segments["third"] = max(total - second, Decimal("0"))
+    elif rule["type"] == "manager":
+        segments["fixed"] = total
+    result = {}
+    commission = Decimal("0")
+    for key, base in segments.items():
+        rate = Decimal(str(rule[key + "_rate"]))
+        paid = (base * rate / 100).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        result[key + "_amount"] = float(base)
+        result[key + "_commission"] = float(paid)
+        commission += paid
+    result["commission_total"] = float(commission)
+    return result
+
+
+@app.get("/api/reports/commissions")
+async def get_staff_commission_report(month: str = "", staff_id: int = 0, x_records_password: str = Header(default="")):
+    if not verify_records_password(x_records_password):
+        raise HTTPException(403, "记录查看密码错误")
+    if staff_id < 0:
+        raise HTTPException(400, "人员筛选无效")
+    start_at, end_at = _month_business_bounds(month)
+    start_text, end_text = start_at.strftime("%Y-%m-%d %H:%M:%S"), end_at.strftime("%Y-%m-%d %H:%M:%S")
+    conn = get_db()
+    try:
+        bills = [dict(row) for row in conn.execute(
+            """SELECT id, room_no, open_at, close_at, total, payment_method, notes,
+                      performance_staff_id, performance_staff_name, performance_commission_rule
+               FROM billing_records WHERE status = 'closed'
+                 AND COALESCE(NULLIF(open_at, ''), close_at) >= ?
+                 AND COALESCE(NULLIF(open_at, ''), close_at) < ?
+               ORDER BY close_at DESC, id DESC""", (start_text, end_text)
+        ).fetchall()]
+        staff = {row["id"]: dict(row) for row in conn.execute("SELECT * FROM staff").fetchall()}
+    finally:
+        conn.close()
+
+    grouped = {}
+    for person in staff.values():
+        rule = json.loads(person["commission_rule"] or "{}")
+        if person["status"] == "在职" and rule.get("type") in {"marketing", "manager"}:
+            grouped[person["id"]] = []
+    unassigned_count = 0
+    for bill in bills:
+        owner = bill["performance_staff_id"]
+        if not owner:
+            unassigned_count += 1
+            continue
+        grouped.setdefault(owner, []).append(bill)
+
+    options, people = [], []
+    for owner, orders in grouped.items():
+        person = staff.get(owner)
+        name = person["name"] if person else (orders[0]["performance_staff_name"] or "历史人员")
+        status = person["status"] if person else "已移除"
+        options.append({"id": owner, "name": name, "status": status})
+        if staff_id and owner != staff_id:
+            continue
+        current_rule = json.loads(person["commission_rule"] or "{}") if person else {}
+        rules = []
+        for bill in orders:
+            snapshot = json.loads(bill["performance_commission_rule"] or "{}")
+            rules.append(StaffCommissionRule.model_validate(snapshot or current_rule).model_dump())
+        rule = rules[0] if rules else StaffCommissionRule.model_validate(current_rule).model_dump()
+        changed = len({json.dumps(item, sort_keys=True) for item in rules}) > 1
+        amount = sum((Decimal(str(bill["total"] or 0)) for bill in orders), Decimal("0"))
+        people.append({
+            "staff_id": owner, "name": name, "status": status, "rule": rule,
+            "performance_total": float(amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
+            "bill_count": len(orders), "rule_changed": changed,
+            "warning": "当月订单规则有变化，暂按最后一笔结账保存的规则计算，请核对。" if changed else "",
+            "rule_source": "订单保存的规则" if rules else "人员当前规则（暂无订单）",
+            **_calculate_staff_commission(amount, rule),
+        })
+    options.sort(key=lambda item: (item["name"], item["id"]))
+    people.sort(key=lambda item: (-item["performance_total"], item["staff_id"]))
+    if staff_id and not any(item["id"] == staff_id for item in options):
+        raise HTTPException(400, "该月份没有此业绩归属人员")
+    orders = [bill for bill in bills if bill["performance_staff_id"] and (not staff_id or bill["performance_staff_id"] == staff_id)]
+    orders.sort(key=lambda bill: (bill["open_at"] or bill["close_at"] or "", bill["id"]), reverse=True)
+    for bill in orders:
+        person = staff.get(bill["performance_staff_id"])
+        bill["staff_name"] = bill["performance_staff_name"] or (person["name"] if person else "历史人员")
+        bill.pop("performance_commission_rule", None)
+    return {"code": 0, "data": {
+        "month": start_at.strftime("%Y-%m"), "start_at": start_text, "end_at": end_text,
+        "staff_options": options, "people": people, "orders": orders,
+        "unassigned_count": unassigned_count,
+        "summary": {
+            "performance_total": float(sum((Decimal(str(item["performance_total"])) for item in people), Decimal("0"))),
+            "commission_total": float(sum((Decimal(str(item["commission_total"])) for item in people), Decimal("0"))),
+            "bill_count": len(orders), "staff_count": len(people),
+            "changed_rule_count": sum(item["rule_changed"] for item in people),
+        },
+    }}
+
+
 def _actual_payment_category(method: str) -> str:
     value = (method or "").strip()
     for category in ("美团", "微信", "支付宝", "现金"):
@@ -1904,20 +2081,24 @@ async def create_billing_history(req: BillingHistoryWriteRequest):
         raise HTTPException(403, "管理密码错误")
     conn = get_db()
     try:
+        performance_id, performance_name, performance_rule = _resolve_performance_staff(
+            conn, req.performance_staff_id or 0, allow_inactive=True
+        )
         close_at = _recharge_log_time(req.close_at)
         open_at = _recharge_log_time(req.open_at or req.close_at)
         conn.execute(
             """INSERT INTO billing_records
                (room_no, open_at, close_at, room_fee, drinks_fee, total, discount,
                 payment_method, settlement_member_name, settlement_member_phone,
-                notes, status)
-               VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, 'closed')""",
+                notes, performance_staff_id, performance_staff_name, performance_commission_rule, status)
+               VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, 'closed')""",
             (
                 req.room_no, open_at, close_at, round(req.room_fee, 2),
                 round(req.drinks_fee, 2), round(req.total, 2), req.payment_method,
                 (req.settlement_member_name or "").strip() or None,
                 (req.settlement_member_phone or "").strip() or None,
                 (req.notes or "").strip() or None,
+                performance_id, performance_name, performance_rule,
             ),
         )
         billing_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
@@ -1935,16 +2116,25 @@ async def update_billing_history(billing_id: int, req: BillingHistoryWriteReques
     conn = get_db()
     try:
         existing = conn.execute(
-            "SELECT id, open_at FROM billing_records WHERE id = ? AND status = 'closed'", (billing_id,)
+            "SELECT * FROM billing_records WHERE id = ? AND status = 'closed'", (billing_id,)
         ).fetchone()
         if not existing:
             raise HTTPException(404, "结账记录不存在")
+        if req.performance_staff_id is None or req.performance_staff_id == existing["performance_staff_id"]:
+            performance_id, performance_name, performance_rule = (
+                existing["performance_staff_id"], existing["performance_staff_name"], existing["performance_commission_rule"]
+            )
+        else:
+            performance_id, performance_name, performance_rule = _resolve_performance_staff(
+                conn, req.performance_staff_id, allow_inactive=True, existing=existing
+            )
         open_at = _recharge_log_time(req.open_at) if req.open_at else (existing["open_at"] or _recharge_log_time(req.close_at))
         conn.execute(
             """UPDATE billing_records
                SET room_no = ?, room_fee = ?, drinks_fee = ?, total = ?, discount = 0,
                    payment_method = ?, settlement_member_name = ?,
-                   settlement_member_phone = ?, notes = ?, open_at = ?, close_at = ?
+                   settlement_member_phone = ?, notes = ?, open_at = ?, close_at = ?,
+                   performance_staff_id = ?, performance_staff_name = ?, performance_commission_rule = ?
                WHERE id = ?""",
             (
                 req.room_no, round(req.room_fee, 2), round(req.drinks_fee, 2),
@@ -1952,7 +2142,7 @@ async def update_billing_history(billing_id: int, req: BillingHistoryWriteReques
                 (req.settlement_member_name or "").strip() or None,
                 (req.settlement_member_phone or "").strip() or None,
                 (req.notes or "").strip() or None,
-                open_at, _recharge_log_time(req.close_at), billing_id,
+                open_at, _recharge_log_time(req.close_at), performance_id, performance_name, performance_rule, billing_id,
             ),
         )
         conn.execute("DELETE FROM billing_payments WHERE billing_id = ?", (billing_id,))

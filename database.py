@@ -334,6 +334,9 @@ def _migrate_billing_columns(conn: sqlite3.Connection):
         ("settlement_member_name", "TEXT"),
         ("settlement_member_phone", "TEXT"),
         ("member_balance_after", "REAL"),
+        ("performance_staff_id", "INTEGER"),
+        ("performance_staff_name", "TEXT"),
+        ("performance_commission_rule", "TEXT"),
     ]
     for col_name, col_type in required_columns:
         if col_name not in columns:
@@ -399,6 +402,8 @@ def _migrate_management_columns(conn: sqlite3.Connection):
     staff_columns = {row[1] for row in conn.execute("PRAGMA table_info(staff)").fetchall()}
     if "salary" not in staff_columns:
         conn.execute("ALTER TABLE staff ADD COLUMN salary REAL DEFAULT 0")
+    if "commission_rule" not in staff_columns:
+        conn.execute("ALTER TABLE staff ADD COLUMN commission_rule TEXT DEFAULT '{}'")
 def _migrate_device_command_columns(conn: sqlite3.Connection):
     columns = {row[1] for row in conn.execute("PRAGMA table_info(device_commands)").fetchall()}
     if "retryable" not in columns:

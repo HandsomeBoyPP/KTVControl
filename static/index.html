@@ -10,7 +10,7 @@
 
 <title>KTV 前台控制</title>
 
-<link rel="stylesheet" href="/static/style.css?v=15">
+<link rel="stylesheet" href="/static/style.css?v=16">
 
 </head>
 
@@ -36,6 +36,7 @@
     <button class="tab-btn" data-tab="packages"><span class="tab-icon">&#9636;</span> 套餐管理</button>
     <button class="tab-btn" data-tab="inventory"><span class="tab-icon">&#9635;</span> 库存管理</button>
     <button class="tab-btn" data-tab="staff"><span class="tab-icon">&#9823;</span> 店内人员管理</button>
+    <button class="tab-btn records-access-only" data-tab="commissions" style="display:none;"><span class="tab-icon">&#165;</span> 营销提成</button>
 
     <button class="tab-btn records-access-only" data-tab="logs" style="display:none;"><span class="tab-icon">&#9776;</span> 操作日志</button>
   </div>
@@ -102,6 +103,7 @@
         <input type="number" id="settleActualTotal" min="0" step="0.01" style="width:160px;" oninput="onSettleActualPriceInput()">
         <small id="settlePriceHint" style="display:block;color:var(--text-dim);margin-top:4px;">默认等于应收合计</small>
       </div>
+      <div class="form-group"><label>业绩归属人员（必选）</label><select id="settlePerformanceStaff" required><option value="">-- 请选择人员或无 --</option><option value="0">无</option></select><small style="color:var(--text-dim);">业绩按调整后的实收金额计算，组合支付只计算一次。</small></div>
       <div class="form-group"><label>支付方式</label>
         <select id="settlePayment" onchange="onSettlePaymentChange()"><option value="">-- 请选择支付方式 --</option><option value="现金">现金</option><option value="微信">微信</option><option value="支付宝">支付宝</option><option value="美团">美团</option><option value="组合支付">组合支付</option><option value="会员余额">会员余额</option></select>
       </div>
@@ -235,8 +237,8 @@
     </div>
     <div class="table-wrap">
       <table class="data-table" id="historyTable">
-        <thead><tr><th>房间</th><th>开台时间</th><th>结账时间</th><th>套餐费</th><th>酒水费</th><th>酒水明细</th><th>支付金额</th><th>支付方式</th><th>结账会员</th><th>备注</th><th class="del-col" style="display:none;">操作</th></tr></thead>
-        <tbody><tr><td colspan="11" class="empty-hint">暂无记录</td></tr></tbody>
+        <thead><tr><th>房间</th><th>开台时间</th><th>结账时间</th><th>套餐费</th><th>酒水费</th><th>酒水明细</th><th>支付金额</th><th>支付方式</th><th>业绩归属人员</th><th>结账会员</th><th>备注</th><th class="del-col" style="display:none;">操作</th></tr></thead>
+        <tbody><tr><td colspan="12" class="empty-hint">暂无记录</td></tr></tbody>
       </table>
     </div>
   </section>
@@ -288,13 +290,52 @@
 
   <section class="tab-panel" id="tab-staff">
     <div class="section-header">
-      <div><h2>店内人员</h2><p class="section-note">仅用于人员资料管理，不参与系统登录和权限。</p></div>
+      <div><h2>店内人员</h2><p class="section-note">人员资料及提成规则配置，不参与系统登录和权限。</p></div>
       <button class="btn btn-sm btn-accent" onclick="showStaffModal()">+ 新增人员</button>
     </div>
     <div class="table-wrap">
       <table class="data-table" id="staffTable">
-        <thead><tr><th>&#22995;&#21517;</th><th>&#25163;&#26426;&#21495;</th><th>&#23703;&#20301;</th><th>&#29366;&#24577;</th><th class="admin-only" style="display:none;">&#24037;&#36164;</th><th>&#22791;&#27880;</th><th>&#25805;&#20316;</th></tr></thead>
-        <tbody><tr><td colspan="7" class="empty-hint">&#26242;&#26080;&#24215;&#20869;&#20154;&#21592;</td></tr></tbody>
+        <thead><tr><th>&#22995;&#21517;</th><th>&#25163;&#26426;&#21495;</th><th>&#23703;&#20301;</th><th>&#29366;&#24577;</th><th class="admin-only" style="display:none;">基本薪资</th><th class="records-access-only" style="display:none;">提成规则</th><th>&#22791;&#27880;</th><th>&#25805;&#20316;</th></tr></thead>
+        <tbody><tr><td colspan="8" class="empty-hint">&#26242;&#26080;&#24215;&#20869;&#20154;&#21592;</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="tab-panel" id="tab-commissions">
+    <div class="section-header report-header">
+      <div><h2>营销提成</h2><p class="section-note" id="commissionRange">按开台时间统计，营业日早上 6 点切换</p></div>
+      <div class="report-date-controls">
+        <button class="btn btn-sm btn-secondary" onclick="changeCommissionMonth(-1)">上个月</button>
+        <input type="month" id="commissionMonth" onchange="onCommissionMonthChange()">
+        <select id="commissionStaff" aria-label="筛选业绩归属人员" onchange="fetchCommissionReport()"><option value="0">全部人员</option></select>
+        <button class="btn btn-sm btn-secondary" onclick="setCommissionCurrentMonth()">本月</button>
+        <button class="btn btn-sm btn-secondary" onclick="changeCommissionMonth(1)">下个月</button>
+        <button class="btn btn-sm btn-accent" onclick="fetchCommissionReport()">查询</button>
+      </div>
+    </div>
+    <div class="report-summary-grid commission-summary-grid">
+      <div class="report-summary-card primary"><span title="已结账且归属营销人员或经理的调整后实收金额。会员余额消费计入，充卡不计入；组合支付只计算一次。">业绩总额</span><strong id="commissionPerformance">¥0.00</strong></div>
+      <div class="report-summary-card"><span title="营销按每个人整月业绩分段计算；经理使用固定比例。不含基本薪资，尚未确认或发放。">应发提成（试算）</span><strong id="commissionTotal">¥0.00</strong></div>
+      <div class="report-summary-card"><span>关联结账单数</span><strong id="commissionBillCount">0 单</strong></div>
+    </div>
+    <p class="section-note">仅统计已结账订单，按调整后的实收金额计业绩。会员余额消费计入；充卡、未结账和无归属订单不计入。营销按个人整月业绩分段计算，基本薪资不含在提成中。</p>
+    <p class="section-note" id="commissionUnassignedHint"></p>
+    <div id="commissionWarning" class="commission-warning" role="status" style="display:none;"></div>
+    <div class="report-view-tabs" role="tablist" aria-label="提成查看方式">
+      <button class="report-view-tab active" id="commissionPeopleTab" type="button" role="tab" aria-selected="true" onclick="switchCommissionView('people')">人员汇总</button>
+      <button class="report-view-tab" id="commissionOrdersTab" type="button" role="tab" aria-selected="false" onclick="switchCommissionView('orders')">订单明细</button>
+    </div>
+    <div id="commissionPeoplePanel" class="table-wrap">
+      <table class="data-table" id="commissionPeopleTable">
+        <thead><tr><th>人员</th><th>提成类型</th><th>月度业绩</th><th>单数</th><th>第一档提成</th><th>第二档提成</th><th>第三档提成</th><th>固定提成</th><th>应发提成</th></tr></thead>
+        <tbody><tr><td colspan="9" class="empty-hint">请选择月份查询</td></tr></tbody>
+      </table>
+    </div>
+    <div id="commissionOrdersPanel" class="table-wrap" style="display:none;">
+      <p class="section-note">明细用于核对业绩，不逐单计算阶梯提成。</p>
+      <table class="data-table" id="commissionOrdersTable">
+        <thead><tr><th>订单号</th><th>房间</th><th>开台时间</th><th>结账时间</th><th>归属人员</th><th>实收 / 计提业绩</th><th>支付方式</th><th>备注</th></tr></thead>
+        <tbody><tr><td colspan="8" class="empty-hint">请选择月份查询</td></tr></tbody>
       </table>
     </div>
   </section>
@@ -745,7 +786,7 @@
 </div>
 <!-- Staff Modal -->
 <div class="modal-overlay" id="staffModal">
-  <div class="modal">
+  <div class="modal" style="max-height:85vh;overflow-y:auto;">
     <h3 id="staffModalTitle">&#26032;&#22686;&#24215;&#20869;&#20154;&#21592;</h3>
     <input type="hidden" id="editStaffId">
     <div class="form-group"><label>&#22995;&#21517;</label><input type="text" id="staffName"></div>
@@ -753,6 +794,19 @@
     <div class="form-group"><label>&#23703;&#20301;</label><input type="text" id="staffPosition" value="&#21592;&#24037;" placeholder="&#20363;&#22914;&#65306;&#24215;&#38271;&#12289;&#25910;&#38134;&#21592;&#12289;&#26381;&#21153;&#21592;"></div>
     <div class="form-group"><label>&#29366;&#24577;</label><select id="staffStatus"><option value="&#22312;&#32844;">&#22312;&#32844;</option><option value="&#31163;&#32844;">&#31163;&#32844;</option></select></div>
     <div class="form-group admin-only" style="display:none;"><label>&#24037;&#36164;&#65288;&#20803;/&#26376;&#65289;</label><input type="number" id="staffSalary" value="0" min="0" step="0.01"><small style="color:var(--text-dim);">Ctrl+/ &#26174;&#31034;&#25110;&#38544;&#34255;</small></div>
+    <div class="records-access-only" style="display:none;">
+      <div class="form-group"><label>提成类型</label><select id="staffCommissionType" onchange="updateStaffCommissionFields()"><option value="none">不计算提成</option><option value="marketing">营销人员 · 阶梯分段</option><option value="manager">经理 · 固定比例</option></select></div>
+      <div id="staffMarketingRule" hidden>
+        <div class="form-group"><label>第一档业绩上限（元）</label><input id="staffFirstLimit" type="number" min="0.01" step="0.01" value="10000" oninput="updateStaffCommissionFields()"></div>
+        <div class="form-group"><label>第一档比例（%）</label><input id="staffFirstRate" type="number" min="0" max="100" step="0.01" value="15" oninput="updateStaffCommissionFields()"></div>
+        <div class="form-group"><label>第二档业绩上限（元）</label><input id="staffSecondLimit" type="number" min="0.01" step="0.01" value="20000" oninput="updateStaffCommissionFields()"></div>
+        <div class="form-group"><label>第二档比例（%）</label><input id="staffSecondRate" type="number" min="0" max="100" step="0.01" value="20" oninput="updateStaffCommissionFields()"></div>
+        <div class="form-group"><label>超过第二档上限部分的比例（%）</label><input id="staffThirdRate" type="number" min="0" max="100" step="0.01" value="25" oninput="updateStaffCommissionFields()"></div>
+      </div>
+      <div id="staffManagerRule" hidden><div class="form-group"><label>经理固定提成比例（%）</label><input id="staffFixedRate" type="number" min="0" max="100" step="0.01" value="20" oninput="updateStaffCommissionFields()"></div></div>
+      <p id="staffCommissionHint" class="section-note" style="white-space:pre-line;"></p>
+      <p class="section-note">此处只保存个人规则，暂不关联订单、不计算或发放提成。修改规则不会自动影响其他人员。</p>
+    </div>
     <div class="form-group"><label>&#22791;&#27880;</label><input type="text" id="staffNotes" maxlength="200"></div>
     <div class="modal-actions">
       <button class="btn btn-secondary" onclick="closeModal('staffModal')">&#21462;&#28040;</button>
@@ -761,12 +815,13 @@
   </div>
 </div>
 <div class="modal-overlay" id="billingHistoryModal">
-  <div class="modal">
+  <div class="modal" style="max-height:85vh;overflow-y:auto;">
     <h3 id="billingHistoryModalTitle">新增结账记录</h3>
     <div class="form-group"><label>房间</label><input type="text" id="billingHistoryRoom" maxlength="64"></div>
     <div class="form-group"><label>套餐费</label><input type="number" id="billingHistoryRoomFee" min="0" step="0.01"></div>
     <div class="form-group"><label>酒水费</label><input type="number" id="billingHistoryDrinksFee" min="0" step="0.01"></div>
     <div class="form-group"><label>支付金额</label><input type="number" id="billingHistoryTotal" min="0" step="0.01"></div>
+    <div class="form-group"><label>业绩归属人员</label><select id="billingHistoryPerformanceStaff"><option value="0">无</option></select></div>
     <div class="form-group"><label>支付方式</label><input type="text" id="billingHistoryPayment" maxlength="32" list="paymentMethodOptions" value="现金"></div>
     <div class="form-group"><label>结账会员</label><input type="text" id="billingHistoryMember" maxlength="64"></div>
     <div class="form-group"><label>会员手机号</label><input type="text" id="billingHistoryMemberPhone" maxlength="32" placeholder="可不填"></div>
@@ -827,7 +882,7 @@
     </div>
   </div>
 </div>
-<script src="/static/app.js?v=43"></script>
+<script src="/static/app.js?v=47"></script>
 
 
 
@@ -858,5 +913,3 @@
 </body>
 
 </html>
-
-

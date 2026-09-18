@@ -183,7 +183,24 @@ class UpdateInventoryRequest(RequestModel):
     low_stock: int | None = Field(default=None, ge=0)
     admin_password: str | None = None
 
+class StaffCommissionRule(RequestModel):
+    type: Literal["none", "marketing", "manager"] = "none"
+    first_limit: float = Field(default=10000, gt=0)
+    second_limit: float = Field(default=20000, gt=0)
+    first_rate: float = Field(default=15, ge=0, le=100)
+    second_rate: float = Field(default=20, ge=0, le=100)
+    third_rate: float = Field(default=25, ge=0, le=100)
+    fixed_rate: float = Field(default=20, ge=0, le=100)
+
+    @model_validator(mode="after")
+    def validate_limits(self) -> Self:
+        if self.second_limit <= self.first_limit:
+            raise ValueError("第二档上限必须大于第一档上限")
+        return self
+
+
 class CreateStaffRequest(RequestModel):
+    commission_rule: StaffCommissionRule = Field(default_factory=StaffCommissionRule)
     name: str = Field(min_length=1, max_length=64)
     phone: str | None = Field(default=None, max_length=32)
     position: str = Field(default="员工", min_length=1, max_length=32)
@@ -193,6 +210,7 @@ class CreateStaffRequest(RequestModel):
 
 
 class UpdateStaffRequest(RequestModel):
+    commission_rule: StaffCommissionRule | None = None
     name: str | None = Field(default=None, min_length=1, max_length=64)
     phone: str | None = Field(default=None, max_length=32)
     position: str | None = Field(default=None, min_length=1, max_length=32)
@@ -211,18 +229,33 @@ class UpdateBillingRequest(RequestModel):
     notes: str | None = Field(default=None, max_length=200)
 
 
-class SaveBillingDraftRequest(RequestModel):
-    package_id: int = Field(gt=0)
-    payment_method: Literal["现金", "微信", "支付宝", "美团", "会员余额"] | None = None
-    actual_total: float | None = Field(default=None, ge=0)
-    notes: str | None = Field(default=None, max_length=200)
-
 class SettlementPaymentItem(RequestModel):
     payment_method: Literal["现金", "微信", "支付宝", "美团"]
     amount: float = Field(gt=0)
 
 
+class SaveBillingDraftRequest(RequestModel):
+    performance_staff_id: int = Field(ge=0, description="0表示明确选择无")
+    package_id: int = Field(gt=0)
+    payment_method: Literal["现金", "微信", "支付宝", "美团", "会员余额"] | None = None
+    payment_splits: list[SettlementPaymentItem] = Field(default_factory=list)
+    actual_total: float | None = Field(default=None, ge=0)
+    notes: str | None = Field(default=None, max_length=200)
+
+    @model_validator(mode="after")
+    def validate_payment(self) -> Self:
+        if self.payment_method == "会员余额" and self.payment_splits:
+            raise ValueError("会员余额暂不支持组合支付")
+        methods = [item.payment_method for item in self.payment_splits]
+        if len(methods) != len(set(methods)):
+            raise ValueError("组合支付方式不能重复")
+        if self.payment_splits and len(self.payment_splits) < 2:
+            raise ValueError("组合支付至少需要两种支付方式")
+        return self
+
+
 class SettlementRequest(RequestModel):
+    performance_staff_id: int = Field(ge=0, description="0表示明确选择无")
     billing_id: int = Field(gt=0)
     package_id: int = Field(gt=0)
     payment_method: Literal["现金", "微信", "支付宝", "美团", "会员余额"] | None = None
@@ -244,6 +277,7 @@ class SettlementRequest(RequestModel):
         return self
 
 class BillingHistoryWriteRequest(RequestModel):
+    performance_staff_id: int | None = Field(default=None, ge=0)
     room_no: str = Field(min_length=1, max_length=64)
     room_fee: float = Field(ge=0)
     drinks_fee: float = Field(ge=0)
