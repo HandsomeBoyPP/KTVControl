@@ -766,7 +766,7 @@ body {
   font-weight: 700;
   white-space: nowrap;
 }
-.commission-summary-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.commission-summary-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); }
 .commission-warning {
   margin: 14px 0;
   padding: 12px 14px;

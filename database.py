@@ -86,6 +86,9 @@ def init_db():
             payment_method TEXT DEFAULT '现金',
             detail TEXT DEFAULT '会员充卡',
             notes TEXT,
+            performance_staff_id INTEGER,
+            performance_staff_name TEXT,
+            performance_commission_rule TEXT,
             created_at TEXT DEFAULT (datetime('now', 'localtime')),
             FOREIGN KEY (member_id) REFERENCES members(id)
         );
@@ -173,6 +176,7 @@ def init_db():
             settlement_member_id INTEGER,
             settlement_member_name TEXT,
             settlement_member_phone TEXT,
+            draft_member_phone TEXT,
             member_balance_after REAL,
             status TEXT DEFAULT 'open',
             created_at TEXT DEFAULT (datetime('now', 'localtime'))
@@ -308,6 +312,9 @@ def _migrate_recharge_log_columns(conn: sqlite3.Connection):
         ("gift_amount", "REAL DEFAULT 0"),
         ("detail", "TEXT DEFAULT '会员充卡'"),
         ("notes", "TEXT"),
+        ("performance_staff_id", "INTEGER"),
+        ("performance_staff_name", "TEXT"),
+        ("performance_commission_rule", "TEXT"),
     ]
     for name, column_type in required_columns:
         if name not in columns:
@@ -333,6 +340,7 @@ def _migrate_billing_columns(conn: sqlite3.Connection):
         ("settlement_member_id", "INTEGER"),
         ("settlement_member_name", "TEXT"),
         ("settlement_member_phone", "TEXT"),
+        ("draft_member_phone", "TEXT"),
         ("member_balance_after", "REAL"),
         ("performance_staff_id", "INTEGER"),
         ("performance_staff_name", "TEXT"),

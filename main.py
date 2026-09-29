@@ -500,29 +500,35 @@ async def recharge_member(member_id: int, req: RechargeRequest):
         member = conn.execute("SELECT * FROM members WHERE id = ?", (member_id,)).fetchone()
         if not member:
             raise HTTPException(404, "会员不存在")
+        performance_id, performance_name, performance_rule = _resolve_performance_staff(conn, req.performance_staff_id)
         credited_total = round(req.amount + req.gift_amount, 2)
         new_balance = round(member["balance"] + credited_total, 2)
         conn.execute("UPDATE members SET balance = ? WHERE id = ?", (new_balance, member_id))
         conn.execute(
             """INSERT INTO recharge_logs
                (member_id, member_name, member_phone, amount, gift_amount,
-                balance_after, payment_method, detail, notes)
-               VALUES (?, ?, ?, ?, ?, ?, ?, '会员充卡', ?)""",
+                balance_after, payment_method, detail, notes,
+                performance_staff_id, performance_staff_name, performance_commission_rule)
+               VALUES (?, ?, ?, ?, ?, ?, ?, '会员充卡', ?, ?, ?, ?)""",
             (
                 member_id, member["name"], member["phone"], req.amount, req.gift_amount,
                 new_balance, req.payment_method, (req.notes or "").strip() or None,
+                performance_id, performance_name, performance_rule,
             ),
         )
         conn.commit()
         log_operation(
             "recharge_member", None,
             f"会员充值 {member['name']} amount={req.amount:.2f} gift={req.gift_amount:.2f} "
-            f"credited_total={credited_total:.2f} balance_after={new_balance:.2f}",
+            f"credited_total={credited_total:.2f} balance_after={new_balance:.2f} "
+            f"performance_staff={performance_name or '无'} performance_amount={req.amount:.2f}",
         )
         return {
             "code": 0, "msg": "ok", "balance": new_balance,
             "amount": round(req.amount, 2), "gift_amount": round(req.gift_amount, 2),
             "credited_total": credited_total,
+            "performance_staff_id": performance_id,
+            "performance_staff_name": performance_name,
         }
     finally:
         conn.close()
@@ -542,7 +548,8 @@ async def list_recharge_logs(x_records_password: str = Header(default="")):
     try:
         rows = conn.execute(
             """SELECT id, member_id, member_name, member_phone, amount, gift_amount,
-                      balance_after, payment_method, detail, notes, created_at
+                      balance_after, payment_method, detail, notes, created_at,
+                      performance_staff_id, performance_staff_name, performance_commission_rule
                FROM recharge_logs
                ORDER BY datetime(created_at) DESC, id DESC
                LIMIT 1000"""
@@ -561,16 +568,21 @@ async def create_recharge_log(req: RechargeLogWriteRequest):
         member = conn.execute("SELECT id FROM members WHERE id = ?", (req.member_id,)).fetchone()
         if not member:
             raise HTTPException(404, "会员不存在")
+        performance_id, performance_name, performance_rule = _resolve_performance_staff(
+            conn, req.performance_staff_id or 0, allow_inactive=True
+        )
         created_at = _recharge_log_time(req.created_at)
         conn.execute(
             """INSERT INTO recharge_logs
                (member_id, member_name, member_phone, amount, gift_amount,
-                balance_after, payment_method, detail, notes, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                balance_after, payment_method, detail, notes, created_at,
+                performance_staff_id, performance_staff_name, performance_commission_rule)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 req.member_id, req.member_name, req.member_phone,
                 round(req.amount, 2), round(req.gift_amount, 2), round(req.balance_after, 2),
                 req.payment_method, req.detail, (req.notes or "").strip() or None, created_at,
+                performance_id, performance_name, performance_rule,
             ),
         )
         log_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
@@ -587,22 +599,31 @@ async def update_recharge_log(log_id: int, req: RechargeLogWriteRequest):
         raise HTTPException(403, "管理密码错误")
     conn = get_db()
     try:
-        existing = conn.execute("SELECT id FROM recharge_logs WHERE id = ?", (log_id,)).fetchone()
+        existing = conn.execute("SELECT * FROM recharge_logs WHERE id = ?", (log_id,)).fetchone()
         if not existing:
             raise HTTPException(404, "充卡流水不存在")
         member = conn.execute("SELECT id FROM members WHERE id = ?", (req.member_id,)).fetchone()
         if not member:
             raise HTTPException(404, "会员不存在")
+        if req.performance_staff_id is None or req.performance_staff_id == existing["performance_staff_id"]:
+            performance_id, performance_name, performance_rule = (
+                existing["performance_staff_id"], existing["performance_staff_name"], existing["performance_commission_rule"]
+            )
+        else:
+            performance_id, performance_name, performance_rule = _resolve_performance_staff(
+                conn, req.performance_staff_id, allow_inactive=True, existing=existing
+            )
         conn.execute(
             """UPDATE recharge_logs
                SET member_id = ?, member_name = ?, member_phone = ?, amount = ?, gift_amount = ?,
-                   balance_after = ?, payment_method = ?, detail = ?, notes = ?, created_at = ?
+                   balance_after = ?, payment_method = ?, detail = ?, notes = ?, created_at = ?,
+                   performance_staff_id = ?, performance_staff_name = ?, performance_commission_rule = ?
                WHERE id = ?""",
             (
                 req.member_id, req.member_name, req.member_phone,
                 round(req.amount, 2), round(req.gift_amount, 2), round(req.balance_after, 2),
                 req.payment_method, req.detail, (req.notes or "").strip() or None,
-                _recharge_log_time(req.created_at), log_id,
+                _recharge_log_time(req.created_at), performance_id, performance_name, performance_rule, log_id,
             ),
         )
         conn.commit()
@@ -1363,14 +1384,28 @@ async def save_billing_draft(billing_id: int, req: SaveBillingDraftRequest):
                 if saved_payment_method else []
             )
 
+        draft_member_phone = None
+        draft_member_name = None
+        draft_member_balance = None
+        if saved_payment_method == "会员余额":
+            member = conn.execute(
+                "SELECT name, phone, balance FROM members WHERE TRIM(phone) = ?", (req.member_phone,)
+            ).fetchone()
+            if not member:
+                raise HTTPException(404, "会员手机号未注册")
+            draft_member_phone = member["phone"].strip()
+            draft_member_name = member["name"]
+            draft_member_balance = round(float(member["balance"] or 0), 2)
+
         conn.execute(
             """UPDATE billing_records
                SET package_id = ?, room_fee = ?, drinks_fee = ?, total = ?,
                    discount = 0, payment_method = ?, notes = ?,
-                   performance_staff_id = ?, performance_staff_name = ?, performance_commission_rule = ?
+                   performance_staff_id = ?, performance_staff_name = ?, performance_commission_rule = ?,
+                   draft_member_phone = ?
                WHERE id = ? AND status = 'open'""",
             (req.package_id, room_fee, drinks_fee, total, saved_payment_method, notes,
-             performance_id, performance_name, performance_rule, billing_id),
+             performance_id, performance_name, performance_rule, draft_member_phone, billing_id),
         )
         drinks = [dict(row) for row in conn.execute(
             "SELECT * FROM drink_orders WHERE billing_id = ? ORDER BY id", (billing_id,)
@@ -1390,7 +1425,8 @@ async def save_billing_draft(billing_id: int, req: SaveBillingDraftRequest):
             "save_billing_draft", billing["room_no"],
             f"billing={billing_id} package={req.package_id} drinks_fee={drinks_fee} "
             f"calculated_total={subtotal} actual_total={total} price_modified={price_modified} "
-            f"payment={payment_breakdown} performance_staff={performance_name or '无'} performance_amount={total} notes={notes or ''}",
+            f"payment={payment_breakdown} draft_member_phone={draft_member_phone or ''} "
+            f"performance_staff={performance_name or '无'} performance_amount={total} notes={notes or ''}",
         )
         return {
             "code": 0, "msg": "ok", "billing_id": billing_id,
@@ -1402,6 +1438,9 @@ async def save_billing_draft(billing_id: int, req: SaveBillingDraftRequest):
             "notes": notes, "drinks": drinks,
             "performance_staff_id": performance_id,
             "performance_staff_name": performance_name,
+            "draft_member_phone": draft_member_phone,
+            "draft_member_name": draft_member_name,
+            "draft_member_balance": draft_member_balance,
         }
     except Exception:
         conn.rollback()
@@ -1590,7 +1629,7 @@ async def settle_billing(req: SettlementRequest):
         settlement_member_phone = None
         if payment_method == "会员余额":
             if req.member_phone:
-                member = conn.execute("SELECT * FROM members WHERE phone = ?", (req.member_phone,)).fetchone()
+                member = conn.execute("SELECT * FROM members WHERE TRIM(phone) = ?", (req.member_phone,)).fetchone()
             elif billing["member_id"]:
                 member = conn.execute("SELECT * FROM members WHERE id = ?", (billing["member_id"],)).fetchone()
             else:
@@ -1606,7 +1645,7 @@ async def settle_billing(req: SettlementRequest):
             member_balance_after = round(balance - total, 2)
             settlement_member_id = member["id"]
             settlement_member_name = member["name"]
-            settlement_member_phone = member["phone"]
+            settlement_member_phone = member["phone"].strip()
             conn.execute(
                 "UPDATE members SET balance = ? WHERE id = ?", (member_balance_after, member["id"])
             )
@@ -1629,6 +1668,7 @@ async def settle_billing(req: SettlementRequest):
                    settlement_member_id = ?, settlement_member_name = ?,
                    settlement_member_phone = ?, member_balance_after = ?,
                    performance_staff_id = ?, performance_staff_name = ?, performance_commission_rule = ?,
+                   draft_member_phone = NULL,
                    status = 'closed'
                WHERE id = ?""",
             (
@@ -1873,9 +1913,54 @@ async def get_staff_commission_report(month: str = "", staff_id: int = 0, x_reco
                  AND COALESCE(NULLIF(open_at, ''), close_at) < ?
                ORDER BY close_at DESC, id DESC""", (start_text, end_text)
         ).fetchall()]
+        _attach_billing_payment_breakdowns(conn, bills)
+        recharges = [dict(row) for row in conn.execute(
+            """SELECT id, member_name, member_phone, amount, gift_amount, payment_method,
+                      notes, created_at, performance_staff_id, performance_staff_name,
+                      performance_commission_rule
+               FROM recharge_logs
+               WHERE created_at >= ? AND created_at < ?
+               ORDER BY datetime(created_at) DESC, id DESC""", (start_text, end_text)
+        ).fetchall()]
         staff = {row["id"]: dict(row) for row in conn.execute("SELECT * FROM staff").fetchall()}
     finally:
         conn.close()
+
+    commission_methods = {"现金", "微信", "支付宝"}
+    entries = []
+    for bill in bills:
+        performance_amount = round(sum(
+            float(payment["amount"] or 0)
+            for payment in bill["payment_breakdown"]
+            if payment["method"] in commission_methods
+        ), 2)
+        if performance_amount <= 0:
+            continue
+        entries.append({
+            "source": "消费", "record_id": f"B{bill['id']}", "id": bill["id"],
+            "room_no": bill["room_no"], "member_name": None,
+            "occurred_at": bill["open_at"] or bill["close_at"], "event_at": bill["close_at"],
+            "payment_method": bill["payment_method"], "original_amount": round(float(bill["total"] or 0), 2),
+            "performance_amount": performance_amount, "notes": bill["notes"],
+            "performance_staff_id": bill["performance_staff_id"],
+            "performance_staff_name": bill["performance_staff_name"],
+            "performance_commission_rule": bill["performance_commission_rule"],
+        })
+    for recharge in recharges:
+        amount = round(float(recharge["amount"] or 0), 2)
+        if recharge["payment_method"] not in commission_methods or amount <= 0:
+            continue
+        entries.append({
+            "source": "充卡", "record_id": f"R{recharge['id']}", "id": recharge["id"],
+            "room_no": None, "member_name": recharge["member_name"],
+            "occurred_at": recharge["created_at"], "event_at": recharge["created_at"],
+            "payment_method": recharge["payment_method"], "original_amount": amount,
+            "performance_amount": amount, "gift_amount": round(float(recharge["gift_amount"] or 0), 2),
+            "notes": recharge["notes"], "performance_staff_id": recharge["performance_staff_id"],
+            "performance_staff_name": recharge["performance_staff_name"],
+            "performance_commission_rule": recharge["performance_commission_rule"],
+        })
+    entries.sort(key=lambda item: (item["event_at"] or item["occurred_at"] or "", item["record_id"]), reverse=True)
 
     grouped = {}
     for person in staff.values():
@@ -1883,53 +1968,57 @@ async def get_staff_commission_report(month: str = "", staff_id: int = 0, x_reco
         if person["status"] == "在职" and rule.get("type") in {"marketing", "manager"}:
             grouped[person["id"]] = []
     unassigned_count = 0
-    for bill in bills:
-        owner = bill["performance_staff_id"]
+    for entry in entries:
+        owner = entry["performance_staff_id"]
         if not owner:
             unassigned_count += 1
             continue
-        grouped.setdefault(owner, []).append(bill)
+        grouped.setdefault(owner, []).append(entry)
 
     options, people = [], []
-    for owner, orders in grouped.items():
+    for owner, records in grouped.items():
         person = staff.get(owner)
-        name = person["name"] if person else (orders[0]["performance_staff_name"] or "历史人员")
+        name = person["name"] if person else (records[0]["performance_staff_name"] or "历史人员")
         status = person["status"] if person else "已移除"
         options.append({"id": owner, "name": name, "status": status})
         if staff_id and owner != staff_id:
             continue
         current_rule = json.loads(person["commission_rule"] or "{}") if person else {}
         rules = []
-        for bill in orders:
-            snapshot = json.loads(bill["performance_commission_rule"] or "{}")
+        for record in records:
+            snapshot = json.loads(record["performance_commission_rule"] or "{}")
             rules.append(StaffCommissionRule.model_validate(snapshot or current_rule).model_dump())
         rule = rules[0] if rules else StaffCommissionRule.model_validate(current_rule).model_dump()
         changed = len({json.dumps(item, sort_keys=True) for item in rules}) > 1
-        amount = sum((Decimal(str(bill["total"] or 0)) for bill in orders), Decimal("0"))
+        amount = sum((Decimal(str(record["performance_amount"] or 0)) for record in records), Decimal("0"))
+        consumption_total = sum((Decimal(str(record["performance_amount"])) for record in records if record["source"] == "消费"), Decimal("0"))
+        recharge_total = amount - consumption_total
         people.append({
             "staff_id": owner, "name": name, "status": status, "rule": rule,
             "performance_total": float(amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
-            "bill_count": len(orders), "rule_changed": changed,
-            "warning": "当月订单规则有变化，暂按最后一笔结账保存的规则计算，请核对。" if changed else "",
-            "rule_source": "订单保存的规则" if rules else "人员当前规则（暂无订单）",
+            "bill_count": len(records), "consumption_total": float(consumption_total),
+            "recharge_total": float(recharge_total), "rule_changed": changed,
+            "warning": "当月业绩记录的规则有变化，暂按最后一笔记录保存的规则计算，请核对。" if changed else "",
+            "rule_source": "业绩记录保存的规则" if rules else "人员当前规则（暂无业绩）",
             **_calculate_staff_commission(amount, rule),
         })
     options.sort(key=lambda item: (item["name"], item["id"]))
     people.sort(key=lambda item: (-item["performance_total"], item["staff_id"]))
     if staff_id and not any(item["id"] == staff_id for item in options):
         raise HTTPException(400, "该月份没有此业绩归属人员")
-    orders = [bill for bill in bills if bill["performance_staff_id"] and (not staff_id or bill["performance_staff_id"] == staff_id)]
-    orders.sort(key=lambda bill: (bill["open_at"] or bill["close_at"] or "", bill["id"]), reverse=True)
-    for bill in orders:
-        person = staff.get(bill["performance_staff_id"])
-        bill["staff_name"] = bill["performance_staff_name"] or (person["name"] if person else "历史人员")
-        bill.pop("performance_commission_rule", None)
+    orders = [entry for entry in entries if entry["performance_staff_id"] and (not staff_id or entry["performance_staff_id"] == staff_id)]
+    for entry in orders:
+        person = staff.get(entry["performance_staff_id"])
+        entry["staff_name"] = entry["performance_staff_name"] or (person["name"] if person else "历史人员")
+        entry.pop("performance_commission_rule", None)
     return {"code": 0, "data": {
         "month": start_at.strftime("%Y-%m"), "start_at": start_text, "end_at": end_text,
         "staff_options": options, "people": people, "orders": orders,
         "unassigned_count": unassigned_count,
         "summary": {
             "performance_total": float(sum((Decimal(str(item["performance_total"])) for item in people), Decimal("0"))),
+            "consumption_total": float(sum((Decimal(str(item["consumption_total"])) for item in people), Decimal("0"))),
+            "recharge_total": float(sum((Decimal(str(item["recharge_total"])) for item in people), Decimal("0"))),
             "commission_total": float(sum((Decimal(str(item["commission_total"])) for item in people), Decimal("0"))),
             "bill_count": len(orders), "staff_count": len(people),
             "changed_rule_count": sum(item["rule_changed"] for item in people),

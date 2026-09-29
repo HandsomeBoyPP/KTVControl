@@ -386,6 +386,8 @@ function clearCommissionReport(message){
   const performance=document.getElementById("commissionPerformance");
   if(!performance)return;
   performance.textContent="—";
+  document.getElementById("commissionConsumption").textContent="—";
+  document.getElementById("commissionRecharge").textContent="—";
   document.getElementById("commissionTotal").textContent="—";
   document.getElementById("commissionBillCount").textContent="—";
   document.getElementById("commissionUnassignedHint").textContent="";
@@ -393,7 +395,7 @@ function clearCommissionReport(message){
   document.getElementById("commissionWarning").textContent="";
   document.getElementById("commissionRange").textContent="按开台时间统计，营业日早上 6 点切换";
   document.querySelector("#commissionPeopleTable tbody").innerHTML='<tr><td colspan="9" class="empty-hint">'+escapeHtml(message)+'</td></tr>';
-  document.querySelector("#commissionOrdersTable tbody").innerHTML='<tr><td colspan="8" class="empty-hint">'+escapeHtml(message)+'</td></tr>';
+  document.querySelector("#commissionOrdersTable tbody").innerHTML='<tr><td colspan="9" class="empty-hint">'+escapeHtml(message)+'</td></tr>';
 }
 
 function onCommissionMonthChange(){
@@ -442,23 +444,25 @@ function commissionTierHtml(person,key){
 function renderCommissionReport(report,selectedStaff="0"){
   const summary=report.summary||{};
   document.getElementById("commissionPerformance").textContent=_reportMoney(summary.performance_total);
+  document.getElementById("commissionConsumption").textContent=_reportMoney(summary.consumption_total);
+  document.getElementById("commissionRecharge").textContent=_reportMoney(summary.recharge_total);
   document.getElementById("commissionTotal").textContent=_reportMoney(summary.commission_total);
-  document.getElementById("commissionBillCount").textContent=Number(summary.bill_count||0)+" 单";
+  document.getElementById("commissionBillCount").textContent=Number(summary.bill_count||0)+" 条";
   document.getElementById("commissionRange").textContent="统计范围："+report.start_at+" 至 "+report.end_at+"（不含结束时间）";
   const select=document.getElementById("commissionStaff");
   select.innerHTML='<option value="0">全部人员</option>'+(report.staff_options||[]).map(person=>'<option value="'+Number(person.id)+'">'+escapeHtml(person.name)+(person.status!=="在职"?"（"+escapeHtml(person.status)+"）":"")+'</option>').join("");
   select.value=selectedStaff;
-  document.getElementById("commissionUnassignedHint").textContent="本月全店另有 "+Number(report.unassigned_count||0)+" 单无归属或未归属，不计入提成；需要时可在结账记录的隐藏编辑功能中补选人员。";
+  document.getElementById("commissionUnassignedHint").textContent="本月全店另有 "+Number(report.unassigned_count||0)+" 条符合渠道条件、但选择无或未归属的业绩记录，不计入提成；可在结账记录或充卡记录的隐藏编辑功能中补选人员。";
   const people=report.people||[],warning=document.getElementById("commissionWarning"),changed=people.filter(person=>person.rule_changed);
   warning.style.display=changed.length?"":"none";
-  warning.textContent=changed.length?"请核对："+changed.map(person=>person.name).join("、")+"当月订单保存的规则有变化，当前暂按各自最后一笔结账保存的规则计算整月提成。":"";
+  warning.textContent=changed.length?"请核对："+changed.map(person=>person.name).join("、")+"当月业绩记录保存的规则有变化，当前暂按各自最后一笔记录保存的规则计算整月提成。":"";
   document.querySelector("#commissionPeopleTable tbody").innerHTML=people.length?people.map(person=>
-    '<tr><td>'+escapeHtml(person.name)+(person.status!=="在职"?'<div class="cell-note">'+escapeHtml(person.status)+'</div>':'')+'</td><td title="'+escapeHtml(staffCommissionText(person.rule))+'">'+escapeHtml(person.rule.type==="marketing"?"营销 · 阶梯分段":person.rule.type==="manager"?"经理 · 固定比例":"不计算")+'<div class="cell-note">'+escapeHtml(person.rule_source)+(person.rule_changed?' · 规则有变化':'')+'</div></td><td>'+_reportMoney(person.performance_total)+'</td><td>'+Number(person.bill_count||0)+'</td><td>'+commissionTierHtml(person,"first")+'</td><td>'+commissionTierHtml(person,"second")+'</td><td>'+commissionTierHtml(person,"third")+'</td><td>'+commissionTierHtml(person,"fixed")+'</td><td class="report-total-cell">'+_reportMoney(person.commission_total)+'</td></tr>'
-  ).join(""):'<tr><td colspan="9" class="empty-hint">暂无营销或经理业绩，先在人员管理配置提成类型，并在结账时选择归属人员</td></tr>';
+    '<tr><td>'+escapeHtml(person.name)+(person.status!=="在职"?'<div class="cell-note">'+escapeHtml(person.status)+'</div>':'')+'</td><td title="'+escapeHtml(staffCommissionText(person.rule))+'">'+escapeHtml(person.rule.type==="marketing"?"营销 · 阶梯分段":person.rule.type==="manager"?"经理 · 固定比例":"不计算")+'<div class="cell-note">'+escapeHtml(person.rule_source)+(person.rule_changed?' · 规则有变化':'')+'</div></td><td>'+_reportMoney(person.performance_total)+'<div class="cell-note">消费 '+_reportMoney(person.consumption_total)+' / 充卡 '+_reportMoney(person.recharge_total)+'</div></td><td>'+Number(person.bill_count||0)+'</td><td>'+commissionTierHtml(person,"first")+'</td><td>'+commissionTierHtml(person,"second")+'</td><td>'+commissionTierHtml(person,"third")+'</td><td>'+commissionTierHtml(person,"fixed")+'</td><td class="report-total-cell">'+_reportMoney(person.commission_total)+'</td></tr>'
+  ).join(""):'<tr><td colspan="9" class="empty-hint">暂无营销或经理业绩，先在人员管理配置提成类型，并在结账或充值时选择归属人员</td></tr>';
   const orders=report.orders||[];
   document.querySelector("#commissionOrdersTable tbody").innerHTML=orders.length?orders.map(order=>
-    '<tr><td>#'+Number(order.id)+'</td><td>'+escapeHtml(order.room_no||"-")+'</td><td class="cell-time">'+escapeHtml(order.open_at||order.close_at||"-")+'</td><td class="cell-time">'+escapeHtml(order.close_at||"-")+'</td><td>'+escapeHtml(order.staff_name||"-")+'</td><td class="report-total-cell">'+_reportMoney(order.total)+'</td><td>'+escapeHtml(order.payment_method||"-")+'</td><td>'+escapeHtml(order.notes||"-")+'</td></tr>'
-  ).join(""):'<tr><td colspan="8" class="empty-hint">该月份暂无关联的已结账订单</td></tr>';
+    '<tr><td>'+escapeHtml(order.source)+'</td><td>'+escapeHtml(order.record_id)+'</td><td>'+escapeHtml(order.source==="消费"?(order.room_no||"-"):(order.member_name||"-"))+'</td><td class="cell-time">'+escapeHtml(order.occurred_at||"-")+'</td><td>'+escapeHtml(order.staff_name||"-")+'</td><td>'+_reportMoney(order.original_amount)+(order.source==="充卡"&&Number(order.gift_amount||0)>0?'<div class="cell-note">另赠 '+_reportMoney(order.gift_amount)+'</div>':'')+'</td><td class="report-total-cell">'+_reportMoney(order.performance_amount)+'</td><td>'+escapeHtml(order.payment_method||"-")+'</td><td>'+escapeHtml(order.notes||"-")+'</td></tr>'
+  ).join(""):'<tr><td colspan="9" class="empty-hint">该月份暂无关联的业绩记录</td></tr>';
 }
 
 function _localDateText(date){
@@ -1277,9 +1281,11 @@ async function confirmEditMember(){
 
 
 
-function showRechargeModal(memberId){
+async function showRechargeModal(memberId){
   const member=membersData.find(item=>item.id===memberId);if(!member)return;
   currentMember=member;
+  try{await loadPerformanceStaff();}catch(e){alert(e.message);return;}
+  populatePerformanceStaff("rechargePerformanceStaff");
   document.getElementById("rechargeMemberLabel").textContent=member.name;
   document.getElementById("rechargeAmount").value="";
   document.getElementById("rechargeGiftAmount").value="0";
@@ -1299,6 +1305,7 @@ function updateRechargePreview(){
 
 async function confirmRecharge(){
   if(!currentMember)return;
+  const performanceStaffId=readPerformanceStaff("rechargePerformanceStaff");if(performanceStaffId===null)return;
   const amount=parseFloat(document.getElementById("rechargeAmount").value);
   const giftAmount=parseFloat(document.getElementById("rechargeGiftAmount").value)||0;
   const method=document.getElementById("rechargeMethod").value;
@@ -1308,7 +1315,7 @@ async function confirmRecharge(){
   try{
     const r=await fetch(API.recharge+"/"+currentMember.id+"/recharge",{
       method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({amount,gift_amount:giftAmount,payment_method:method,notes})
+      body:JSON.stringify({amount,gift_amount:giftAmount,payment_method:method,performance_staff_id:performanceStaffId,notes})
     });
     const j=await r.json();
     if(j.code===0){
@@ -1801,9 +1808,10 @@ function showSettle(billingId){
 
 
 
-    document.getElementById("settleMemberPhone").value="";
+    document.getElementById("settleMemberPhone").value=bill.draft_member_phone||"";
     document.getElementById("settleMemberPassword").value="";
     document.getElementById("settleMemberLabel").textContent="";
+    if(bill.payment_method==="会员余额"&&bill.draft_member_phone)lookupSettleMember(true);
 
 
 
@@ -1935,11 +1943,11 @@ function onSettlePaymentChange(){
   updateSplitPaymentSummary();
 }
 
-function lookupSettleMember(){
+function lookupSettleMember(silent=false){
 
   const phone=document.getElementById("settleMemberPhone").value.trim();
 
-  if(!phone){alert("请输入会员手机号");return;}
+  if(!phone){if(!silent)alert("请输入会员手机号");return;}
 
   fetch("/api/members/verify",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({phone,password:""})})
 
@@ -1947,9 +1955,9 @@ function lookupSettleMember(){
 
       if(j.code===0){document.getElementById("settleMemberLabel").textContent="会员: "+j.data.name+"，余额: "+j.data.balance;}
 
-      else{alert(j.detail||"查找失败");}
+      else if(!silent){alert(j.detail||"查找失败");}
 
-    }).catch(e=>alert("查找失败: "+e));
+    }).catch(e=>{if(!silent)alert("查找失败: "+e);});
 
 }
 
@@ -1974,6 +1982,8 @@ async function saveSettlementDraft(){
   if(!packageId){alert("请选择套餐");return;}
   const pricing=getSettlementPricePayload();if(!pricing)return;
   const selectedPayment=document.getElementById("settlePayment").value;
+  const memberPhone=document.getElementById("settleMemberPhone").value.trim();
+  if(selectedPayment==="会员余额"&&!memberPhone){alert("会员余额支付必须填写会员手机号");document.getElementById("settleMemberPhone").focus();return;}
   const paymentSplits=selectedPayment==="组合支付"?collectPaymentSplits():[];
   if(selectedPayment==="组合支付"){
     if(paymentSplits.length<2){alert("组合支付至少填写两种支付方式的金额");return;}
@@ -1985,6 +1995,7 @@ async function saveSettlementDraft(){
     performance_staff_id:performanceStaffId,
     payment_method:selectedPayment==="组合支付"?null:(selectedPayment||null),
     payment_splits:paymentSplits,
+    member_phone:selectedPayment==="会员余额"?memberPhone:null,
     actual_total:pricing.actual_total,
     notes:pricing.notes
   };
@@ -1997,6 +2008,10 @@ async function saveSettlementDraft(){
     document.getElementById("settleActualTotal").value=Number(j.total||0).toFixed(2);
     document.getElementById("settleActualTotal").dataset.manual=j.price_modified?"1":"0";
     document.getElementById("settleNotes").value=j.notes||"";
+    document.getElementById("settleMemberPhone").value=j.draft_member_phone||"";
+    document.getElementById("settleMemberLabel").textContent=j.draft_member_name
+      ?"会员: "+j.draft_member_name+"，余额: "+Number(j.draft_member_balance||0).toFixed(2)
+      :"";
     renderSettleDrinkSummary(currentBilling.drinks);
     updateSettleTotal();
     fetchActiveBilling();fetchInventory();
@@ -2181,7 +2196,7 @@ async function fetchRechargeLogs(){
     rechargeLogsData=(json.data||[]).sort((a,b)=>_historyTimeValue(b.created_at)-_historyTimeValue(a.created_at)||b.id-a.id);
     renderRechargeLogs(rechargeLogsData);
   }catch(e){
-    document.querySelector("#rechargeLogsTable tbody").innerHTML='<tr><td colspan="9" class="empty-hint">记录加载失败：'+escapeHtml(e.message)+'</td></tr>';
+    document.querySelector("#rechargeLogsTable tbody").innerHTML='<tr><td colspan="10" class="empty-hint">记录加载失败：'+escapeHtml(e.message)+'</td></tr>';
   }
 }
 
@@ -2217,13 +2232,13 @@ function renderBillingHistory(bills){
 
 function renderRechargeLogs(logs){
   const tb=document.querySelector("#rechargeLogsTable tbody");
-  if(!logs.length){tb.innerHTML='<tr><td colspan="9" class="empty-hint">暂无记录</td></tr>';return;}
+  if(!logs.length){tb.innerHTML='<tr><td colspan="10" class="empty-hint">暂无记录</td></tr>';return;}
   tb.innerHTML=logs.map(r=>{
     const t=r.created_at?String(r.created_at).replace("T"," ").substring(0,19):"-";
     const member=escapeHtml(r.member_name||"-")+'<div style="font-size:11px;color:var(--text-dim);">'+escapeHtml(r.member_phone||"-")+'</div>';
     const balance=r.balance_after==null?"-":Number(r.balance_after).toFixed(2);
     const actions='<button class="btn btn-xs btn-outline admin-only" style="display:none;" onclick="showRechargeLogModal('+r.id+')">修改</button> <button class="btn btn-xs btn-danger admin-only" style="display:none;" onclick="deleteRechargeLog('+r.id+')">删除</button>';
-    return '<tr><td>'+member+'</td><td>'+escapeHtml(r.detail||"会员充卡")+'</td><td>'+Number(r.amount||0).toFixed(2)+'</td><td>'+Number(r.gift_amount||0).toFixed(2)+'</td><td>'+balance+'</td><td>'+escapeHtml(r.payment_method||"-")+'</td><td>'+escapeHtml(r.notes||"-")+'</td><td style="font-size:12px;color:var(--text-dim);">'+t+'</td><td class="del-col" style="display:none;">'+actions+'</td></tr>';
+    return '<tr><td>'+member+'</td><td>'+escapeHtml(r.detail||"会员充卡")+'</td><td>'+Number(r.amount||0).toFixed(2)+'</td><td>'+Number(r.gift_amount||0).toFixed(2)+'</td><td>'+balance+'</td><td>'+escapeHtml(r.payment_method||"-")+'</td><td>'+escapeHtml(r.performance_staff_name||(r.performance_staff_id===null||r.performance_staff_id===undefined?"未归属":"无"))+'</td><td>'+escapeHtml(r.notes||"-")+'</td><td style="font-size:12px;color:var(--text-dim);">'+t+'</td><td class="del-col" style="display:none;">'+actions+'</td></tr>';
   }).join("");
   applyAdminToolsVisibility();
 }
@@ -2293,10 +2308,12 @@ async function showRechargeLogModal(logId=null){
   if(!adminToolsVisible||!adminSessionPassword){alert("请先按 Ctrl+/ 验证管理密码");return;}
   if(!membersData.length)await fetchMembers();
   if(!membersData.length){alert("请先添加会员");return;}
+  try{await loadPerformanceStaff();}catch(e){alert(e.message);return;}
   editingRechargeLogId=logId;
   const select=document.getElementById("rechargeLogMember");
   select.innerHTML=membersData.map(m=>'<option value="'+m.id+'">'+escapeHtml(m.name)+'（'+escapeHtml(m.phone)+'）</option>').join("");
   const log=logId==null?null:rechargeLogsData.find(r=>r.id===logId);
+  populatePerformanceStaff("rechargeLogPerformanceStaff",log||{},true);
   document.getElementById("rechargeLogModalTitle").textContent=log?"修改充卡记录":"新增充卡记录";
   if(log){
     select.value=String(log.member_id);
@@ -2334,7 +2351,9 @@ function onRechargeLogMemberChange(){
 
 async function confirmRechargeLog(){
   if(!adminToolsVisible||!adminSessionPassword){alert("管理模式已关闭，请重新验证");return;}
+  const performanceStaffId=readPerformanceStaff("rechargeLogPerformanceStaff");if(performanceStaffId===null)return;
   const data={
+    performance_staff_id:performanceStaffId,
     member_id:parseInt(document.getElementById("rechargeLogMember").value),
     member_name:document.getElementById("rechargeLogMemberName").value.trim(),
     member_phone:document.getElementById("rechargeLogMemberPhone").value.trim(),

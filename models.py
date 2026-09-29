@@ -70,6 +70,7 @@ class ResetMemberPasswordRequest(RequestModel):
 
 
 class RechargeRequest(RequestModel):
+    performance_staff_id: int = Field(ge=0, description="0表示明确选择无")
     amount: float = Field(gt=0)
     gift_amount: float = Field(default=0, ge=0)
     payment_method: Literal["现金", "微信", "支付宝"] = "现金"
@@ -77,6 +78,7 @@ class RechargeRequest(RequestModel):
 
 
 class RechargeLogWriteRequest(RequestModel):
+    performance_staff_id: int | None = Field(default=None, ge=0)
     member_id: int = Field(gt=0)
     member_name: str = Field(min_length=1, max_length=64)
     member_phone: str = Field(min_length=3, max_length=32)
@@ -239,6 +241,7 @@ class SaveBillingDraftRequest(RequestModel):
     package_id: int = Field(gt=0)
     payment_method: Literal["现金", "微信", "支付宝", "美团", "会员余额"] | None = None
     payment_splits: list[SettlementPaymentItem] = Field(default_factory=list)
+    member_phone: str | None = Field(default=None, max_length=32)
     actual_total: float | None = Field(default=None, ge=0)
     notes: str | None = Field(default=None, max_length=200)
 
@@ -251,6 +254,8 @@ class SaveBillingDraftRequest(RequestModel):
             raise ValueError("组合支付方式不能重复")
         if self.payment_splits and len(self.payment_splits) < 2:
             raise ValueError("组合支付至少需要两种支付方式")
+        if self.payment_method == "会员余额" and not self.member_phone:
+            raise ValueError("会员余额支付必须填写会员手机号")
         return self
 
 
