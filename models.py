@@ -70,7 +70,8 @@ class ResetMemberPasswordRequest(RequestModel):
 
 
 class RechargeRequest(RequestModel):
-    performance_staff_id: int = Field(ge=0, description="0表示明确选择无")
+    # 兼容浏览器仍缓存旧版充值弹窗的情况；新版页面仍要求用户明确选择人员或“无”。
+    performance_staff_id: int = Field(default=0, ge=0, description="0表示明确选择无")
     amount: float = Field(gt=0)
     gift_amount: float = Field(default=0, ge=0)
     payment_method: Literal["现金", "微信", "支付宝"] = "现金"
