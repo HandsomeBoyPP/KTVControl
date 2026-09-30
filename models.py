@@ -1,6 +1,6 @@
 """Validated Pydantic request models for KTV Control."""
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -75,6 +75,7 @@ class RechargeRequest(RequestModel):
     amount: float = Field(gt=0)
     gift_amount: float = Field(default=0, ge=0)
     payment_method: Literal["现金", "微信", "支付宝"] = "现金"
+    business_date: date | None = None
     notes: str | None = Field(default=None, max_length=200)
 
 
@@ -89,6 +90,7 @@ class RechargeLogWriteRequest(RequestModel):
     payment_method: str = Field(min_length=1, max_length=32)
     detail: str = Field(min_length=1, max_length=200)
     notes: str | None = Field(default=None, max_length=200)
+    business_date: date | None = None
     created_at: datetime
     admin_password: str
 

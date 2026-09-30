@@ -455,7 +455,7 @@ function renderCommissionReport(report,selectedStaff="0"){
   document.getElementById("commissionUnassignedHint").textContent="本月全店另有 "+Number(report.unassigned_count||0)+" 条符合渠道条件、但选择无或未归属的业绩记录，不计入提成；可在结账记录或充卡记录的隐藏编辑功能中补选人员。";
   const people=report.people||[],warning=document.getElementById("commissionWarning"),changed=people.filter(person=>person.rule_changed);
   warning.style.display=changed.length?"":"none";
-  warning.textContent=changed.length?"请核对："+changed.map(person=>person.name).join("、")+"当月业绩记录保存的规则有变化，当前暂按各自最后一笔记录保存的规则计算整月提成。":"";
+  warning.textContent=changed.length?"请核对："+changed.map(person=>person.name+"："+(person.warning||"历史规则有变化")).join("；"):"";
   document.querySelector("#commissionPeopleTable tbody").innerHTML=people.length?people.map(person=>
     '<tr><td>'+escapeHtml(person.name)+(person.status!=="在职"?'<div class="cell-note">'+escapeHtml(person.status)+'</div>':'')+'</td><td title="'+escapeHtml(staffCommissionText(person.rule))+'">'+escapeHtml(person.rule.type==="marketing"?"营销 · 阶梯分段":person.rule.type==="manager"?"经理 · 固定比例":"不计算")+'<div class="cell-note">'+escapeHtml(person.rule_source)+(person.rule_changed?' · 规则有变化':'')+'</div></td><td>'+_reportMoney(person.performance_total)+'<div class="cell-note">消费 '+_reportMoney(person.consumption_total)+' / 充卡 '+_reportMoney(person.recharge_total)+'</div></td><td>'+Number(person.bill_count||0)+'</td><td>'+commissionTierHtml(person,"first")+'</td><td>'+commissionTierHtml(person,"second")+'</td><td>'+commissionTierHtml(person,"third")+'</td><td>'+commissionTierHtml(person,"fixed")+'</td><td class="report-total-cell">'+_reportMoney(person.commission_total)+'</td></tr>'
   ).join(""):'<tr><td colspan="9" class="empty-hint">暂无营销或经理业绩，先在人员管理配置提成类型，并在结账或充值时选择归属人员</td></tr>';
@@ -1290,6 +1290,8 @@ async function showRechargeModal(memberId){
   document.getElementById("rechargeAmount").value="";
   document.getElementById("rechargeGiftAmount").value="0";
   document.getElementById("rechargeMethod").value="现金";
+  document.getElementById("rechargeBusinessDate").max=_currentBusinessDate();
+  document.getElementById("rechargeBusinessDate").value=_currentBusinessDate();
   document.getElementById("rechargeNotes").value="";
   updateRechargePreview();
   showModal("rechargeModal");
@@ -1309,13 +1311,15 @@ async function confirmRecharge(){
   const amount=parseFloat(document.getElementById("rechargeAmount").value);
   const giftAmount=parseFloat(document.getElementById("rechargeGiftAmount").value)||0;
   const method=document.getElementById("rechargeMethod").value;
+  const businessDate=document.getElementById("rechargeBusinessDate").value;
   const notes=document.getElementById("rechargeNotes").value.trim()||null;
   if(!amount||amount<=0){alert("请输入有效的充卡金额");return;}
   if(giftAmount<0){alert("赠送金额不能小于0");return;}
+  if(!businessDate){alert("请选择归属营业日");return;}
   try{
     const r=await fetch(API.recharge+"/"+currentMember.id+"/recharge",{
       method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({amount,gift_amount:giftAmount,payment_method:method,performance_staff_id:performanceStaffId,notes})
+      body:JSON.stringify({amount,gift_amount:giftAmount,payment_method:method,performance_staff_id:performanceStaffId,business_date:businessDate,notes})
     });
     const j=await r.json();
     if(j.code===0){
@@ -2193,10 +2197,10 @@ async function fetchRechargeLogs(){
   try{
     const response=await fetch(API.rechargeLogs,{headers:{"X-Records-Password":recordsSessionPassword}}),json=await response.json();
     if(!response.ok||json.code!==0)throw new Error(json.detail||"充卡记录加载失败");
-    rechargeLogsData=(json.data||[]).sort((a,b)=>_historyTimeValue(b.created_at)-_historyTimeValue(a.created_at)||b.id-a.id);
+    rechargeLogsData=(json.data||[]).sort((a,b)=>String(b.business_date||"").localeCompare(String(a.business_date||""))||_historyTimeValue(b.created_at)-_historyTimeValue(a.created_at)||b.id-a.id);
     renderRechargeLogs(rechargeLogsData);
   }catch(e){
-    document.querySelector("#rechargeLogsTable tbody").innerHTML='<tr><td colspan="10" class="empty-hint">记录加载失败：'+escapeHtml(e.message)+'</td></tr>';
+    document.querySelector("#rechargeLogsTable tbody").innerHTML='<tr><td colspan="11" class="empty-hint">记录加载失败：'+escapeHtml(e.message)+'</td></tr>';
   }
 }
 
@@ -2232,13 +2236,13 @@ function renderBillingHistory(bills){
 
 function renderRechargeLogs(logs){
   const tb=document.querySelector("#rechargeLogsTable tbody");
-  if(!logs.length){tb.innerHTML='<tr><td colspan="10" class="empty-hint">暂无记录</td></tr>';return;}
+  if(!logs.length){tb.innerHTML='<tr><td colspan="11" class="empty-hint">暂无记录</td></tr>';return;}
   tb.innerHTML=logs.map(r=>{
     const t=r.created_at?String(r.created_at).replace("T"," ").substring(0,19):"-";
     const member=escapeHtml(r.member_name||"-")+'<div style="font-size:11px;color:var(--text-dim);">'+escapeHtml(r.member_phone||"-")+'</div>';
     const balance=r.balance_after==null?"-":Number(r.balance_after).toFixed(2);
     const actions='<button class="btn btn-xs btn-outline admin-only" style="display:none;" onclick="showRechargeLogModal('+r.id+')">修改</button> <button class="btn btn-xs btn-danger admin-only" style="display:none;" onclick="deleteRechargeLog('+r.id+')">删除</button>';
-    return '<tr><td>'+member+'</td><td>'+escapeHtml(r.detail||"会员充卡")+'</td><td>'+Number(r.amount||0).toFixed(2)+'</td><td>'+Number(r.gift_amount||0).toFixed(2)+'</td><td>'+balance+'</td><td>'+escapeHtml(r.payment_method||"-")+'</td><td>'+escapeHtml(r.performance_staff_name||(r.performance_staff_id===null||r.performance_staff_id===undefined?"未归属":"无"))+'</td><td>'+escapeHtml(r.notes||"-")+'</td><td style="font-size:12px;color:var(--text-dim);">'+t+'</td><td class="del-col" style="display:none;">'+actions+'</td></tr>';
+    return '<tr><td>'+member+'</td><td>'+escapeHtml(r.detail||"会员充卡")+'</td><td>'+Number(r.amount||0).toFixed(2)+'</td><td>'+Number(r.gift_amount||0).toFixed(2)+'</td><td>'+balance+'</td><td>'+escapeHtml(r.payment_method||"-")+'</td><td>'+escapeHtml(r.performance_staff_name||(r.performance_staff_id===null||r.performance_staff_id===undefined?"未归属":"无"))+'</td><td>'+escapeHtml(r.business_date||"-")+'</td><td>'+escapeHtml(r.notes||"-")+'</td><td style="font-size:12px;color:var(--text-dim);">'+t+'</td><td class="del-col" style="display:none;">'+actions+'</td></tr>';
   }).join("");
   applyAdminToolsVisibility();
 }
@@ -2314,6 +2318,7 @@ async function showRechargeLogModal(logId=null){
   select.innerHTML=membersData.map(m=>'<option value="'+m.id+'">'+escapeHtml(m.name)+'（'+escapeHtml(m.phone)+'）</option>').join("");
   const log=logId==null?null:rechargeLogsData.find(r=>r.id===logId);
   populatePerformanceStaff("rechargeLogPerformanceStaff",log||{},true);
+  document.getElementById("rechargeLogBusinessDate").max=_currentBusinessDate();
   document.getElementById("rechargeLogModalTitle").textContent=log?"修改充卡记录":"新增充卡记录";
   if(log){
     select.value=String(log.member_id);
@@ -2324,6 +2329,7 @@ async function showRechargeLogModal(logId=null){
     document.getElementById("rechargeLogBalance").value=log.balance_after==null?"":Number(log.balance_after).toFixed(2);
     document.getElementById("rechargeLogDetail").value=log.detail||"会员充卡";
     document.getElementById("rechargeLogMethod").value=log.payment_method||"现金";
+    document.getElementById("rechargeLogBusinessDate").value=log.business_date||_currentBusinessDate();
     document.getElementById("rechargeLogNotes").value=log.notes||"";
     document.getElementById("rechargeLogTime").value=_toDateTimeInput(log.created_at);
   }else{
@@ -2333,6 +2339,7 @@ async function showRechargeLogModal(logId=null){
     document.getElementById("rechargeLogBalance").value=Number(membersData[0].balance||0).toFixed(2);
     document.getElementById("rechargeLogDetail").value="会员充卡";
     document.getElementById("rechargeLogMethod").value="现金";
+    document.getElementById("rechargeLogBusinessDate").value=_currentBusinessDate();
     document.getElementById("rechargeLogNotes").value="";
     document.getElementById("rechargeLogTime").value=_nowForDateTimeInput();
   }
@@ -2362,11 +2369,12 @@ async function confirmRechargeLog(){
     gift_amount:parseFloat(document.getElementById("rechargeLogGiftAmount").value)||0,
     balance_after:parseFloat(document.getElementById("rechargeLogBalance").value),
     payment_method:document.getElementById("rechargeLogMethod").value.trim(),
+    business_date:document.getElementById("rechargeLogBusinessDate").value,
     notes:document.getElementById("rechargeLogNotes").value.trim()||null,
     created_at:document.getElementById("rechargeLogTime").value,
     admin_password:adminSessionPassword
   };
-  if(!data.member_id||!data.member_name||!data.member_phone||!data.detail||!data.payment_method||!Number.isFinite(data.amount)||data.amount<=0||!Number.isFinite(data.gift_amount)||data.gift_amount<0||!Number.isFinite(data.balance_after)||data.balance_after<0||!data.created_at){alert("请完整填写有效字段");return;}
+  if(!data.member_id||!data.member_name||!data.member_phone||!data.detail||!data.payment_method||!data.business_date||!Number.isFinite(data.amount)||data.amount<=0||!Number.isFinite(data.gift_amount)||data.gift_amount<0||!Number.isFinite(data.balance_after)||data.balance_after<0||!data.created_at){alert("请完整填写有效字段");return;}
   const url=editingRechargeLogId==null?API.rechargeLogs:API.rechargeLogs+"/"+editingRechargeLogId;
   try{
     const r=await fetch(url,{method:editingRechargeLogId==null?"POST":"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(data)}),j=await r.json();

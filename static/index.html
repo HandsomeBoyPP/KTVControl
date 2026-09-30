@@ -253,8 +253,8 @@
     </div>
     <div class="table-wrap">
       <table class="data-table" id="rechargeLogsTable">
-        <thead><tr><th>会员</th><th>明细</th><th>充卡金额</th><th>赠送金额</th><th>余额</th><th>支付方式</th><th>业绩归属人员</th><th>备注</th><th>时间</th><th class="del-col" style="display:none;">操作</th></tr></thead>
-        <tbody><tr><td colspan="10" class="empty-hint">暂无记录</td></tr></tbody>
+        <thead><tr><th>会员</th><th>明细</th><th>充卡金额</th><th>赠送金额</th><th>余额</th><th>支付方式</th><th>业绩归属人员</th><th>归属营业日</th><th>备注</th><th>录入时间</th><th class="del-col" style="display:none;">操作</th></tr></thead>
+        <tbody><tr><td colspan="11" class="empty-hint">暂无记录</td></tr></tbody>
       </table>
     </div>
   </section>
@@ -320,7 +320,7 @@
       <div class="report-summary-card"><span title="营销按每个人整月业绩分段计算；经理使用固定比例。不含基本薪资，尚未确认或发放。">应发提成（试算）</span><strong id="commissionTotal">¥0.00</strong></div>
       <div class="report-summary-card"><span>业绩记录数</span><strong id="commissionBillCount">0 条</strong></div>
     </div>
-    <p class="section-note">业绩 = 充卡实际金额（不含赠送）+ 已结账中的现金、微信、支付宝实收。美团、会员余额、未结账和无归属记录不计入；组合支付只取符合条件的渠道。营销按个人整月总业绩分段计算。</p>
+    <p class="section-note">业绩 = 充卡实际金额（不含赠送）+ 已结账中的现金、微信、支付宝实收。美团、会员余额、未结账和无归属记录不计入；组合支付只取符合条件的渠道。提成比例读取店内人员的当前配置，修改后包括历史月份在内都会实时重算。</p>
     <p class="section-note" id="commissionUnassignedHint"></p>
     <div id="commissionWarning" class="commission-warning" role="status" style="display:none;"></div>
     <div class="report-view-tabs" role="tablist" aria-label="提成查看方式">
@@ -617,6 +617,7 @@
 
     <div class="form-group"><label>支付方式</label><select id="rechargeMethod"><option value="现金">现金</option><option value="微信">微信</option><option value="支付宝">支付宝</option></select></div>
     <div class="form-group"><label>业绩归属人员（必选）</label><select id="rechargePerformanceStaff"><option value="">-- 请选择人员或无 --</option><option value="0">无</option></select><small style="color:var(--text-dim);">只按实际充卡金额计算业绩，赠送金额不计算。</small></div>
+    <div class="form-group"><label>归属营业日</label><input type="date" id="rechargeBusinessDate"><small style="color:var(--text-dim);">默认当前营业日；第二天补录时可选择前一天。</small></div>
     <div class="form-group"><label>备注</label><input type="text" id="rechargeNotes" maxlength="200" placeholder="可不填"></div>
 
     <div class="modal-actions">
@@ -854,6 +855,7 @@
     <div class="form-group"><label>明细</label><input type="text" id="rechargeLogDetail" maxlength="200" value="会员充卡"></div>
     <div class="form-group"><label>支付方式</label><input type="text" id="rechargeLogMethod" maxlength="32" list="paymentMethodOptions" value="现金"></div>
     <div class="form-group"><label>业绩归属人员</label><select id="rechargeLogPerformanceStaff"><option value="0">无</option></select></div>
+    <div class="form-group"><label>归属营业日</label><input type="date" id="rechargeLogBusinessDate"></div>
     <div class="form-group"><label>备注</label><input type="text" id="rechargeLogNotes" maxlength="200"></div>
     <div class="form-group"><label>时间</label><input type="datetime-local" id="rechargeLogTime" step="1"></div>
     <p style="font-size:12px;color:var(--warning);">这里只维护充卡流水，不会自动修改会员当前余额。</p>
@@ -886,7 +888,7 @@
     </div>
   </div>
 </div>
-<script src="/static/app.js?v=49"></script>
+<script src="/static/app.js?v=50"></script>
 
 
 

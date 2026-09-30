@@ -500,6 +500,7 @@ async def recharge_member(member_id: int, req: RechargeRequest):
         member = conn.execute("SELECT * FROM members WHERE id = ?", (member_id,)).fetchone()
         if not member:
             raise HTTPException(404, "会员不存在")
+        business_date = _recharge_business_date(req.business_date)
         performance_id, performance_name, performance_rule = _resolve_performance_staff(conn, req.performance_staff_id)
         credited_total = round(req.amount + req.gift_amount, 2)
         new_balance = round(member["balance"] + credited_total, 2)
@@ -508,12 +509,14 @@ async def recharge_member(member_id: int, req: RechargeRequest):
             """INSERT INTO recharge_logs
                (member_id, member_name, member_phone, amount, gift_amount,
                 balance_after, payment_method, detail, notes,
-                performance_staff_id, performance_staff_name, performance_commission_rule)
-               VALUES (?, ?, ?, ?, ?, ?, ?, '会员充卡', ?, ?, ?, ?)""",
+                performance_staff_id, performance_staff_name, performance_commission_rule,
+                business_date)
+               VALUES (?, ?, ?, ?, ?, ?, ?, '会员充卡', ?, ?, ?, ?, ?)""",
             (
                 member_id, member["name"], member["phone"], req.amount, req.gift_amount,
                 new_balance, req.payment_method, (req.notes or "").strip() or None,
                 performance_id, performance_name, performance_rule,
+                business_date,
             ),
         )
         conn.commit()
@@ -521,7 +524,8 @@ async def recharge_member(member_id: int, req: RechargeRequest):
             "recharge_member", None,
             f"会员充值 {member['name']} amount={req.amount:.2f} gift={req.gift_amount:.2f} "
             f"credited_total={credited_total:.2f} balance_after={new_balance:.2f} "
-            f"performance_staff={performance_name or '无'} performance_amount={req.amount:.2f}",
+            f"performance_staff={performance_name or '无'} performance_amount={req.amount:.2f} "
+            f"business_date={business_date}",
         )
         return {
             "code": 0, "msg": "ok", "balance": new_balance,
@@ -529,6 +533,7 @@ async def recharge_member(member_id: int, req: RechargeRequest):
             "credited_total": credited_total,
             "performance_staff_id": performance_id,
             "performance_staff_name": performance_name,
+            "business_date": business_date,
         }
     finally:
         conn.close()
@@ -540,6 +545,18 @@ def _recharge_log_time(value: datetime) -> str:
     return value.strftime("%Y-%m-%d %H:%M:%S")
 
 
+def _recharge_business_date(value=None, *, fallback_time: datetime | None = None) -> str:
+    now = datetime.now()
+    current = (now if now.hour >= 6 else now - timedelta(days=1)).date()
+    selected = value
+    if selected is None and fallback_time is not None:
+        selected = (fallback_time - timedelta(hours=6)).date()
+    selected = selected or current
+    if selected > current:
+        raise HTTPException(400, "归属营业日不能晚于当前营业日")
+    return selected.isoformat()
+
+
 @app.get("/api/recharge-logs")
 async def list_recharge_logs(x_records_password: str = Header(default="")):
     if not verify_records_password(x_records_password):
@@ -549,9 +566,10 @@ async def list_recharge_logs(x_records_password: str = Header(default="")):
         rows = conn.execute(
             """SELECT id, member_id, member_name, member_phone, amount, gift_amount,
                       balance_after, payment_method, detail, notes, created_at,
-                      performance_staff_id, performance_staff_name, performance_commission_rule
+                      business_date, performance_staff_id, performance_staff_name,
+                      performance_commission_rule
                FROM recharge_logs
-               ORDER BY datetime(created_at) DESC, id DESC
+               ORDER BY business_date DESC, datetime(created_at) DESC, id DESC
                LIMIT 1000"""
         ).fetchall()
         return {"code": 0, "data": [dict(row) for row in rows]}
@@ -572,22 +590,23 @@ async def create_recharge_log(req: RechargeLogWriteRequest):
             conn, req.performance_staff_id or 0, allow_inactive=True
         )
         created_at = _recharge_log_time(req.created_at)
+        business_date = _recharge_business_date(req.business_date, fallback_time=req.created_at)
         conn.execute(
             """INSERT INTO recharge_logs
                (member_id, member_name, member_phone, amount, gift_amount,
-                balance_after, payment_method, detail, notes, created_at,
+                balance_after, payment_method, detail, notes, created_at, business_date,
                 performance_staff_id, performance_staff_name, performance_commission_rule)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 req.member_id, req.member_name, req.member_phone,
                 round(req.amount, 2), round(req.gift_amount, 2), round(req.balance_after, 2),
                 req.payment_method, req.detail, (req.notes or "").strip() or None, created_at,
-                performance_id, performance_name, performance_rule,
+                business_date, performance_id, performance_name, performance_rule,
             ),
         )
         log_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
         conn.commit()
-        log_operation("create_recharge_log", None, f"手工新增充卡流水 id={log_id} member={req.member_name} amount={req.amount}")
+        log_operation("create_recharge_log", None, f"手工新增充卡流水 id={log_id} member={req.member_name} amount={req.amount} business_date={business_date}")
         return {"code": 0, "msg": "ok", "id": log_id}
     finally:
         conn.close()
@@ -613,21 +632,27 @@ async def update_recharge_log(log_id: int, req: RechargeLogWriteRequest):
             performance_id, performance_name, performance_rule = _resolve_performance_staff(
                 conn, req.performance_staff_id, allow_inactive=True, existing=existing
             )
+        business_date = (
+            req.business_date.isoformat() if req.business_date is not None
+            else existing["business_date"] or _recharge_business_date(fallback_time=req.created_at)
+        )
+        _recharge_business_date(req.business_date or datetime.strptime(business_date, "%Y-%m-%d").date())
         conn.execute(
             """UPDATE recharge_logs
                SET member_id = ?, member_name = ?, member_phone = ?, amount = ?, gift_amount = ?,
-                   balance_after = ?, payment_method = ?, detail = ?, notes = ?, created_at = ?,
+                   balance_after = ?, payment_method = ?, detail = ?, notes = ?, created_at = ?, business_date = ?,
                    performance_staff_id = ?, performance_staff_name = ?, performance_commission_rule = ?
                WHERE id = ?""",
             (
                 req.member_id, req.member_name, req.member_phone,
                 round(req.amount, 2), round(req.gift_amount, 2), round(req.balance_after, 2),
                 req.payment_method, req.detail, (req.notes or "").strip() or None,
-                _recharge_log_time(req.created_at), performance_id, performance_name, performance_rule, log_id,
+                _recharge_log_time(req.created_at), business_date,
+                performance_id, performance_name, performance_rule, log_id,
             ),
         )
         conn.commit()
-        log_operation("update_recharge_log", None, f"修改充卡流水 id={log_id} member={req.member_name} amount={req.amount}")
+        log_operation("update_recharge_log", None, f"修改充卡流水 id={log_id} member={req.member_name} amount={req.amount} business_date={business_date}")
         return {"code": 0, "msg": "ok"}
     finally:
         conn.close()
@@ -1807,8 +1832,8 @@ def _build_daily_business_report(date: str = "") -> dict:
         recharge_row = conn.execute(
             """SELECT COALESCE(SUM(amount), 0) AS total
                FROM recharge_logs
-               WHERE created_at >= ? AND created_at < ?""",
-            (start_text, end_text),
+               WHERE business_date = ?""",
+            (start_at.strftime("%Y-%m-%d"),),
         ).fetchone()
         recharge_total = float(recharge_row["total"] or 0)
 
@@ -1903,6 +1928,7 @@ async def get_staff_commission_report(month: str = "", staff_id: int = 0, x_reco
         raise HTTPException(400, "人员筛选无效")
     start_at, end_at = _month_business_bounds(month)
     start_text, end_text = start_at.strftime("%Y-%m-%d %H:%M:%S"), end_at.strftime("%Y-%m-%d %H:%M:%S")
+    start_date, end_date = start_at.strftime("%Y-%m-%d"), end_at.strftime("%Y-%m-%d")
     conn = get_db()
     try:
         bills = [dict(row) for row in conn.execute(
@@ -1916,11 +1942,11 @@ async def get_staff_commission_report(month: str = "", staff_id: int = 0, x_reco
         _attach_billing_payment_breakdowns(conn, bills)
         recharges = [dict(row) for row in conn.execute(
             """SELECT id, member_name, member_phone, amount, gift_amount, payment_method,
-                      notes, created_at, performance_staff_id, performance_staff_name,
+                      notes, created_at, business_date, performance_staff_id, performance_staff_name,
                       performance_commission_rule
                FROM recharge_logs
-               WHERE created_at >= ? AND created_at < ?
-               ORDER BY datetime(created_at) DESC, id DESC""", (start_text, end_text)
+               WHERE business_date >= ? AND business_date < ?
+               ORDER BY business_date DESC, datetime(created_at) DESC, id DESC""", (start_date, end_date)
         ).fetchall()]
         staff = {row["id"]: dict(row) for row in conn.execute("SELECT * FROM staff").fetchall()}
     finally:
@@ -1953,7 +1979,7 @@ async def get_staff_commission_report(month: str = "", staff_id: int = 0, x_reco
         entries.append({
             "source": "充卡", "record_id": f"R{recharge['id']}", "id": recharge["id"],
             "room_no": None, "member_name": recharge["member_name"],
-            "occurred_at": recharge["created_at"], "event_at": recharge["created_at"],
+            "occurred_at": recharge["business_date"], "event_at": recharge["created_at"],
             "payment_method": recharge["payment_method"], "original_amount": amount,
             "performance_amount": amount, "gift_amount": round(float(recharge["gift_amount"] or 0), 2),
             "notes": recharge["notes"], "performance_staff_id": recharge["performance_staff_id"],
@@ -1988,8 +2014,16 @@ async def get_staff_commission_report(month: str = "", staff_id: int = 0, x_reco
         for record in records:
             snapshot = json.loads(record["performance_commission_rule"] or "{}")
             rules.append(StaffCommissionRule.model_validate(snapshot or current_rule).model_dump())
-        rule = rules[0] if rules else StaffCommissionRule.model_validate(current_rule).model_dump()
-        changed = len({json.dumps(item, sort_keys=True) for item in rules}) > 1
+        if person:
+            rule = StaffCommissionRule.model_validate(current_rule).model_dump()
+            changed = False
+            warning = ""
+            rule_source = "人员当前规则（修改后实时重算）"
+        else:
+            rule = rules[0] if rules else StaffCommissionRule().model_dump()
+            changed = len({json.dumps(item, sort_keys=True) for item in rules}) > 1
+            warning = "历史人员的业绩记录存在不同规则，暂按最后一笔记录的规则计算。" if changed else ""
+            rule_source = "历史业绩记录保存的规则"
         amount = sum((Decimal(str(record["performance_amount"] or 0)) for record in records), Decimal("0"))
         consumption_total = sum((Decimal(str(record["performance_amount"])) for record in records if record["source"] == "消费"), Decimal("0"))
         recharge_total = amount - consumption_total
@@ -1998,8 +2032,7 @@ async def get_staff_commission_report(month: str = "", staff_id: int = 0, x_reco
             "performance_total": float(amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
             "bill_count": len(records), "consumption_total": float(consumption_total),
             "recharge_total": float(recharge_total), "rule_changed": changed,
-            "warning": "当月业绩记录的规则有变化，暂按最后一笔记录保存的规则计算，请核对。" if changed else "",
-            "rule_source": "业绩记录保存的规则" if rules else "人员当前规则（暂无业绩）",
+            "warning": warning, "rule_source": rule_source,
             **_calculate_staff_commission(amount, rule),
         })
     options.sort(key=lambda item: (item["name"], item["id"]))
@@ -2041,6 +2074,8 @@ async def get_monthly_business_report(month: str = "", x_records_password: str =
     start_at, end_at = _month_business_bounds(month)
     start_text = start_at.strftime("%Y-%m-%d %H:%M:%S")
     end_text = end_at.strftime("%Y-%m-%d %H:%M:%S")
+    start_date = start_at.strftime("%Y-%m-%d")
+    end_date = end_at.strftime("%Y-%m-%d")
 
     daily = {}
     cursor = start_at
@@ -2075,11 +2110,10 @@ async def get_monthly_business_report(month: str = "", x_records_password: str =
         bills = [dict(row) for row in bills]
         _attach_billing_payment_breakdowns(conn, bills)
         recharges = conn.execute(
-            """SELECT amount, payment_method,
-                      strftime('%Y-%m-%d', datetime(created_at, '-6 hours')) AS business_date
+            """SELECT amount, payment_method, business_date
                FROM recharge_logs
-               WHERE created_at >= ? AND created_at < ?""",
-            (start_text, end_text),
+               WHERE business_date >= ? AND business_date < ?""",
+            (start_date, end_date),
         ).fetchall()
     finally:
         conn.close()

@@ -89,6 +89,7 @@ def init_db():
             performance_staff_id INTEGER,
             performance_staff_name TEXT,
             performance_commission_rule TEXT,
+            business_date TEXT,
             created_at TEXT DEFAULT (datetime('now', 'localtime')),
             FOREIGN KEY (member_id) REFERENCES members(id)
         );
@@ -315,6 +316,7 @@ def _migrate_recharge_log_columns(conn: sqlite3.Connection):
         ("performance_staff_id", "INTEGER"),
         ("performance_staff_name", "TEXT"),
         ("performance_commission_rule", "TEXT"),
+        ("business_date", "TEXT"),
     ]
     for name, column_type in required_columns:
         if name not in columns:
@@ -323,7 +325,14 @@ def _migrate_recharge_log_columns(conn: sqlite3.Connection):
         """UPDATE recharge_logs
            SET member_name = COALESCE(member_name, (SELECT name FROM members WHERE members.id = recharge_logs.member_id)),
                member_phone = COALESCE(member_phone, (SELECT phone FROM members WHERE members.id = recharge_logs.member_id)),
-               detail = COALESCE(NULLIF(detail, ''), '会员充卡')"""
+               detail = COALESCE(NULLIF(detail, ''), '会员充卡'),
+               business_date = COALESCE(
+                   NULLIF(business_date, ''),
+                   strftime('%Y-%m-%d', datetime(created_at, '-6 hours'))
+               )"""
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_recharge_logs_business_date ON recharge_logs(business_date, id)"
     )
 
 def _migrate_billing_columns(conn: sqlite3.Connection):
