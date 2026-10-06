@@ -316,3 +316,7 @@ class VerifyAdminRequest(RequestModel):
 
 class VerifyRecordsRequest(RequestModel):
     records_password: str
+
+
+class VerifyLogDeleteRequest(RequestModel):
+    log_delete_password: str

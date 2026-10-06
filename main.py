@@ -13,13 +13,17 @@ from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from database import init_db, get_db, log_operation, verify_admin_password, verify_records_password
+from database import (
+    init_db, get_db, log_operation, verify_admin_password, verify_log_delete_password,
+    verify_records_password,
+)
 from models import (
     AddDrinkRequest, BillingHistoryWriteRequest, BookingRequest, CreateInventoryRequest, CreateMemberRequest, CreateStaffRequest,
     CloseRequest, CreatePackageRequest, DeletePackageRequest, ExtendRequest, OpenRequest,
     ExpireMemberDrinkRequest, RechargeLogWriteRequest, RechargeRequest, ResetMemberPasswordRequest, RetrieveMemberDrinkRequest, SaveBillingDraftRequest, SettlementRequest,
     StoreMemberDrinkRequest, UpdateBillingRequest, UpdateInventoryRequest, UpdateMemberRequest, UpdatePackageRequest, UpdateStaffRequest,
-    VerifyAdminRequest, VerifyMemberRequest, VerifyRecordsRequest, StaffCommissionRule,
+    VerifyAdminRequest, VerifyLogDeleteRequest, VerifyMemberRequest, VerifyRecordsRequest,
+    StaffCommissionRule,
 )
 from scheduler import (
     cancel_auto_close, execute_device_command, ktv_get, ktv_post, restore_all_schedules,
@@ -2311,6 +2315,13 @@ async def verify_admin(req: VerifyAdminRequest):
     raise HTTPException(403, "管理密码错误")
 
 
+@app.post("/api/log-delete/verify")
+async def verify_log_delete_access(req: VerifyLogDeleteRequest):
+    if verify_log_delete_password(req.log_delete_password):
+        return {"code": 0, "msg": "ok"}
+    raise HTTPException(403, "日志删除密码错误")
+
+
 # ---- Operation Log Routes ----
 
 @app.get("/api/operation-logs")
@@ -2333,6 +2344,26 @@ async def list_operation_logs(date: str = "", limit: int = 1000, x_records_passw
             "business_date": start_at.strftime("%Y-%m-%d"),
             "start_at": start_text, "end_at": end_text,
         }
+    finally:
+        conn.close()
+
+
+@app.delete("/api/operation-logs/{log_id}")
+async def delete_operation_log(log_id: int, req: VerifyLogDeleteRequest):
+    if not verify_log_delete_password(req.log_delete_password):
+        raise HTTPException(403, "日志删除密码错误")
+    conn = get_db()
+    try:
+        target = conn.execute("SELECT * FROM operation_logs WHERE id = ?", (log_id,)).fetchone()
+        if not target:
+            raise HTTPException(404, "操作日志不存在")
+        conn.execute("DELETE FROM operation_logs WHERE id = ?", (log_id,))
+        conn.commit()
+        log_operation(
+            "delete_operation_log", target["room_no"],
+            f"删除操作日志 id={log_id} action={target['action']} created_at={target['created_at']}",
+        )
+        return {"code": 0, "msg": "ok"}
     finally:
         conn.close()
 

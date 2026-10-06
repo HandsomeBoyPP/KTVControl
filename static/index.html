@@ -358,8 +358,8 @@
     </div>
     <div class="table-wrap">
       <table class="data-table" id="logsTable">
-        <thead><tr><th>时间</th><th>操作</th><th>房间</th><th>详情</th></tr></thead>
-        <tbody><tr><td colspan="4" class="empty-hint">暂无日志</td></tr></tbody>
+        <thead><tr><th>时间</th><th>操作</th><th>房间</th><th>详情</th><th class="log-delete-only" style="display:none;">操作</th></tr></thead>
+        <tbody><tr><td colspan="5" class="empty-hint">暂无日志</td></tr></tbody>
       </table>
     </div>
   </section>
@@ -888,7 +888,18 @@
     </div>
   </div>
 </div>
-<script src="/static/app.js?v=50"></script>
+<div class="modal-overlay" id="logDeleteAccessModal">
+  <div class="modal">
+    <h3>验证日志删除密码</h3>
+    <p style="font-size:13px;color:var(--text-dim);margin-bottom:14px;">验证通过后，本次页面会话中显示操作日志的逐条删除按钮。</p>
+    <div class="form-group"><label>日志删除密码</label><input type="password" id="logDeleteAccessPassword" autocomplete="current-password"></div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" onclick="closeModal('logDeleteAccessModal')">取消</button>
+      <button class="btn btn-primary" id="confirmLogDeleteAccess">验证并显示</button>
+    </div>
+  </div>
+</div>
+<script src="/static/app.js?v=51"></script>
 
 
 

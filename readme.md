@@ -42,7 +42,7 @@
 
 ### 管理员模式与敏感信息
 
-当前不做复杂账号权限，使用两套独立密码控制敏感功能：
+当前不做复杂账号权限，使用三套独立密码控制敏感功能：
 
 1. 按 `Ctrl+/` 打开管理员验证。
 2. 输入管理密码后，显示会员余额修改、库存成本、人员工资以及删除按钮。
@@ -50,8 +50,9 @@
 4. 手动修改库存数量时，无论管理员模式是否已打开，都需要再次输入管理密码确认。
 
 5. 营业报表、充卡记录和操作日志默认隐藏，按 `Ctrl+\` 输入记录查看密码后统一显示，再按一次重新隐藏。
+6. 按 `Ctrl+Alt+D` 输入日志删除密码后，操作日志显示逐条删除按钮；再次按下会退出删除模式。
 
-> 默认管理密码为 `admin123`，默认记录查看密码为 `records123`。两项都保存在 `data/config.json`，正式使用前请分别修改。
+> 默认管理密码为 `admin123`，默认记录查看密码为 `records123`，默认日志删除密码为 `Peng0524`。三项都保存在 `data/config.json`，正式使用前请分别修改。
 
 ## 关键业务规则
 
@@ -154,8 +155,9 @@ KTV_API_BASE = "http://192.168.110.201:18888"
 | 账单 | `POST /api/billing/add-drink`、`DELETE /api/billing/drink/{id}` | 消费明细管理 |
 | 账单 | `POST /api/billing/settle`、`GET /api/billing/history` | 结账和结账记录 |
 | 账单 | `DELETE /api/billing/{id}` | 删除账单（当前实现，后续计划改为作废/冲正） |
-| 管理 | `POST /api/admin/verify`、`POST /api/records/verify` | 管理密码和记录查看密码验证 |
+| 管理 | `POST /api/admin/verify`、`POST /api/records/verify`、`POST /api/log-delete/verify` | 三套独立密码验证 |
 | 记录 | `GET /api/reports/daily`、`GET /api/recharge-logs`、`GET /api/operation-logs` | 受记录查看密码保护的敏感记录 |
+| 记录 | `DELETE /api/operation-logs/{id}` | 使用日志删除密码逐条删除操作日志 |
 
 ## 主要数据表
 

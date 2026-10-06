@@ -54,7 +54,7 @@ const API = {
 
 
 
-  operationLogs: "/api/operation-logs", adminVerify: "/api/admin/verify",
+  operationLogs: "/api/operation-logs", adminVerify: "/api/admin/verify", logDeleteVerify: "/api/log-delete/verify",
 
   dailyReport: "/api/reports/daily", monthlyReport: "/api/reports/monthly", commissionReport: "/api/reports/commissions", recordsVerify: "/api/records/verify",
 
@@ -86,6 +86,7 @@ let pollingTimers=[], countdownTimers={};
 
 let adminToolsVisible=false, adminSessionPassword="";
 let recordsVisible=false, recordsSessionPassword="";
+let logDeleteVisible=false, logDeleteSessionPassword="";
 let commissionRequestId=0;
 let editingRechargeLogId=null, editingBillingHistoryId=null;
 let currentReportView="daily";
@@ -214,6 +215,8 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("adminToolsPassword")?.addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDefault();confirmAdminToolsAccess();}});
   document.getElementById("confirmRecordsAccess")?.addEventListener("click", confirmRecordsAccess);
   document.getElementById("recordsAccessPassword")?.addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDefault();confirmRecordsAccess();}});
+  document.getElementById("confirmLogDeleteAccess")?.addEventListener("click", confirmLogDeleteAccess);
+  document.getElementById("logDeleteAccessPassword")?.addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDefault();confirmLogDeleteAccess();}});
 
 
 
@@ -262,6 +265,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
 
   applyRecordsVisibility();
+  applyLogDeleteVisibility();
   switchTab("rooms");
 
 
@@ -294,6 +298,21 @@ document.addEventListener("keydown",function(e){
   const input=document.getElementById("recordsAccessPassword");
   input.value="";
   showModal("recordsAccessModal");
+  setTimeout(()=>input.focus(),0);
+});
+
+document.addEventListener("keydown",function(e){
+  if(!e.ctrlKey||!e.altKey||e.shiftKey||e.repeat||String(e.key).toLowerCase()!=="d")return;
+  e.preventDefault();
+  if(logDeleteVisible){
+    logDeleteVisible=false;
+    logDeleteSessionPassword="";
+    applyLogDeleteVisibility();
+    return;
+  }
+  const input=document.getElementById("logDeleteAccessPassword");
+  input.value="";
+  showModal("logDeleteAccessModal");
   setTimeout(()=>input.focus(),0);
 });
 
@@ -380,6 +399,26 @@ function switchCommissionView(view){
     const active=(name==="People")===people,button=document.getElementById("commission"+name+"Tab");
     button.classList.toggle("active",active);button.setAttribute("aria-selected",String(active));
   });
+}
+
+function applyLogDeleteVisibility(){
+  document.querySelectorAll(".log-delete-only").forEach(el=>{el.style.display=logDeleteVisible?"":"none";});
+}
+
+async function confirmLogDeleteAccess(){
+  const input=document.getElementById("logDeleteAccessPassword");
+  const password=input.value;
+  if(!password){alert("请输入日志删除密码");input.focus();return;}
+  try{
+    const response=await fetch(API.logDeleteVerify,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({log_delete_password:password})});
+    const json=await response.json();
+    if(!response.ok||json.code!==0){alert(json.detail||"日志删除密码错误");input.select();return;}
+    logDeleteVisible=true;
+    logDeleteSessionPassword=password;
+    applyLogDeleteVisibility();
+    closeModal("logDeleteAccessModal");
+    input.value="";
+  }catch(e){alert("验证失败: "+e);}
 }
 
 function clearCommissionReport(message){
@@ -2127,13 +2166,24 @@ async function fetchOpLogs(){
     document.getElementById("logsRange").textContent="统计范围："+json.start_at+" 至 "+json.end_at+"（不含结束时间）";
     renderOpLogs(json.data||[]);
   }catch(e){
-    document.querySelector("#logsTable tbody").innerHTML='<tr><td colspan="4" class="empty-hint">日志加载失败：'+escapeHtml(e.message)+'</td></tr>';
+    document.querySelector("#logsTable tbody").innerHTML='<tr><td colspan="5" class="empty-hint">日志加载失败：'+escapeHtml(e.message)+'</td></tr>';
   }
 }
 
 
 
-function renderOpLogs(logs){const tb=document.querySelector("#logsTable tbody");if(!logs.length){tb.innerHTML='<tr><td colspan="4" class="empty-hint">暂无日志</td></tr>';return;}const labels={open_room:"开台",close_room:"关台",extend_room:"",auto_close:"定时关台",create_booking:"预",cancel_booking:"取消预订",booking_open:"预订开台",booking_failed:"预订失败",create_member:"新增会员",update_member:"编辑会员",recharge_member:"会员充值",reset_member_password:"重置密码",create_package:"新增套餐",update_package:"改",delete_package:"删除套餐",create_staff:"新增店内人员",update_staff:"编辑店内人员",delete_staff:"删除店内人员",create_inventory:"新库",update_inventory:"改库",delete_inventory:"删除库存",add_drink:"添加酒水",update_billing:"编辑账单",save_billing_draft:"保存账单",settle_billing:"结账",store_member_drink:"会员存酒",retrieve_member_drink:"会员取酒",expire_drink_to_inventory:"过期存酒转库存",extend_expired_drink:"过期存酒延期",create_billing_history:"新增结账记录",update_billing_history:"修改结账记录",create_recharge_log:"新增充卡流水",update_recharge_log:"修改充卡流水",delete_recharge_log:"删除充卡流水"};tb.innerHTML=logs.map(l=>{const t=l.created_at?l.created_at.replace("T"," ").substring(0,19):"-";return '<tr><td style="font-size:12px;color:var(--text-dim);white-space:nowrap;">'+t+'</td><td>'+(labels[l.action]||l.action)+'</td><td>'+(l.room_no||"-")+'</td><td style="font-size:13px;color:var(--text-dim);">'+(l.detail||"-")+'</td></tr>';}).join("");}
+function renderOpLogs(logs){const tb=document.querySelector("#logsTable tbody");if(!logs.length){tb.innerHTML='<tr><td colspan="5" class="empty-hint">暂无日志</td></tr>';return;}const labels={open_room:"开台",close_room:"关台",extend_room:"",auto_close:"定时关台",create_booking:"预",cancel_booking:"取消预订",booking_open:"预订开台",booking_failed:"预订失败",create_member:"新增会员",update_member:"编辑会员",recharge_member:"会员充值",reset_member_password:"重置密码",create_package:"新增套餐",update_package:"改",delete_package:"删除套餐",create_staff:"新增店内人员",update_staff:"编辑店内人员",delete_staff:"删除店内人员",create_inventory:"新库",update_inventory:"改库",delete_inventory:"删除库存",add_drink:"添加酒水",update_billing:"编辑账单",save_billing_draft:"保存账单",settle_billing:"结账",store_member_drink:"会员存酒",retrieve_member_drink:"会员取酒",expire_drink_to_inventory:"过期存酒转库存",extend_expired_drink:"过期存酒延期",create_billing_history:"新增结账记录",update_billing_history:"修改结账记录",create_recharge_log:"新增充卡流水",update_recharge_log:"修改充卡流水",delete_recharge_log:"删除充卡流水",delete_operation_log:"删除操作日志"};tb.innerHTML=logs.map(l=>{const t=l.created_at?l.created_at.replace("T"," ").substring(0,19):"-";return '<tr><td style="font-size:12px;color:var(--text-dim);white-space:nowrap;">'+t+'</td><td>'+escapeHtml(labels[l.action]||l.action)+'</td><td>'+escapeHtml(l.room_no||"-")+'</td><td style="font-size:13px;color:var(--text-dim);">'+escapeHtml(l.detail||"-")+'</td><td class="log-delete-only" style="display:none;"><button class="btn btn-xs btn-danger" onclick="deleteOperationLog('+Number(l.id)+')">删除</button></td></tr>';}).join("");applyLogDeleteVisibility();}
+
+async function deleteOperationLog(logId){
+  if(!logDeleteVisible||!logDeleteSessionPassword){alert("请先按 Ctrl+Alt+D 验证日志删除密码");return;}
+  if(!confirm("确认删除这条操作日志？删除后无法恢复，并会新增一条删除审计日志。"))return;
+  try{
+    const response=await fetch(API.operationLogs+"/"+logId,{method:"DELETE",headers:{"Content-Type":"application/json"},body:JSON.stringify({log_delete_password:logDeleteSessionPassword})});
+    const json=await response.json();
+    if(!response.ok||json.code!==0){alert("删除失败: "+(json.detail||json.msg||"unknown"));return;}
+    fetchOpLogs();
+  }catch(e){alert("请求失败: "+e);}
+}
 
 
 
