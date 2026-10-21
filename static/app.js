@@ -2176,7 +2176,7 @@ function renderOpLogs(logs){const tb=document.querySelector("#logsTable tbody");
 
 async function deleteOperationLog(logId){
   if(!logDeleteVisible||!logDeleteSessionPassword){alert("请先按 Ctrl+Alt+D 验证日志删除密码");return;}
-  if(!confirm("确认删除这条操作日志？删除后无法恢复，并会新增一条删除审计日志。"))return;
+  if(!confirm("确认删除这条操作日志？删除后无法恢复。"))return;
   try{
     const response=await fetch(API.operationLogs+"/"+logId,{method:"DELETE",headers:{"Content-Type":"application/json"},body:JSON.stringify({log_delete_password:logDeleteSessionPassword})});
     const json=await response.json();

@@ -2359,10 +2359,6 @@ async def delete_operation_log(log_id: int, req: VerifyLogDeleteRequest):
             raise HTTPException(404, "操作日志不存在")
         conn.execute("DELETE FROM operation_logs WHERE id = ?", (log_id,))
         conn.commit()
-        log_operation(
-            "delete_operation_log", target["room_no"],
-            f"删除操作日志 id={log_id} action={target['action']} created_at={target['created_at']}",
-        )
         return {"code": 0, "msg": "ok"}
     finally:
         conn.close()
