@@ -19,7 +19,12 @@ def _load_config_defaults() -> dict:
             return json.loads(CONFIG_EXAMPLE_FILE.read_text(encoding="utf-8"))
         except Exception as e:
             logger.error(f"Failed to load example config: {e}")
-    return {"admin_password": "", "records_password": "", "log_delete_password": "Peng0524"}
+    return {
+        "admin_password": "admin123456",
+        "records_password": "records123",
+        "inventory_password": "muyin888",
+        "log_delete_password": "Peng0524",
+    }
 
 
 def load_config() -> dict:
@@ -55,6 +60,11 @@ def verify_admin_password(password: str) -> bool:
 def verify_records_password(password: str) -> bool:
     cfg = load_config()
     return bool(password) and cfg.get("records_password") == password
+
+
+def verify_inventory_password(password: str) -> bool:
+    cfg = load_config()
+    return bool(password) and cfg.get("inventory_password") == password
 
 
 def verify_log_delete_password(password: str) -> bool:

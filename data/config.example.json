@@ -1,5 +1,6 @@
 {
-  "admin_password": "admin123",
+  "admin_password": "admin123456",
   "records_password": "records123",
+  "inventory_password": "muyin888",
   "log_delete_password": "Peng0524"
 }

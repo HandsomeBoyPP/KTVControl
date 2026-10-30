@@ -186,7 +186,7 @@ class UpdateInventoryRequest(RequestModel):
     cost_price: float | None = Field(default=None, ge=0)
     stock: int | None = Field(default=None, ge=0)
     low_stock: int | None = Field(default=None, ge=0)
-    admin_password: str | None = None
+    inventory_password: str | None = None
 
 class StaffCommissionRule(RequestModel):
     type: Literal["none", "marketing", "manager"] = "none"

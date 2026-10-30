@@ -14,7 +14,8 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from database import (
-    init_db, get_db, log_operation, verify_admin_password, verify_log_delete_password,
+    init_db, get_db, log_operation, verify_admin_password, verify_inventory_password,
+    verify_log_delete_password,
     verify_records_password,
 )
 from models import (
@@ -1202,11 +1203,11 @@ async def update_inventory(item_id: int, req: UpdateInventoryRequest):
         if not item:
             raise HTTPException(404, "物品不存在")
         stock_changed = req.stock is not None and req.stock != item["stock"]
-        if stock_changed and not verify_admin_password(req.admin_password or ""):
-            raise HTTPException(403, "手动修改库存量需要正确的管理密码")
+        if stock_changed and not verify_inventory_password(req.inventory_password or ""):
+            raise HTTPException(403, "手动修改库存量需要正确的密码")
 
         updates = req.model_dump(exclude_unset=True, exclude_none=True)
-        updates.pop("admin_password", None)
+        updates.pop("inventory_password", None)
         if "name" in updates:
             updates["name"] = updates["name"].strip()
         effective_category = updates.get("category", item["category"])
@@ -2319,7 +2320,7 @@ async def verify_admin(req: VerifyAdminRequest):
 async def verify_log_delete_access(req: VerifyLogDeleteRequest):
     if verify_log_delete_password(req.log_delete_password):
         return {"code": 0, "msg": "ok"}
-    raise HTTPException(403, "日志删除密码错误")
+    raise HTTPException(403, "密码错误")
 
 
 # ---- Operation Log Routes ----
@@ -2351,7 +2352,7 @@ async def list_operation_logs(date: str = "", limit: int = 1000, x_records_passw
 @app.delete("/api/operation-logs/{log_id}")
 async def delete_operation_log(log_id: int, req: VerifyLogDeleteRequest):
     if not verify_log_delete_password(req.log_delete_password):
-        raise HTTPException(403, "日志删除密码错误")
+        raise HTTPException(403, "密码错误")
     conn = get_db()
     try:
         target = conn.execute("SELECT * FROM operation_logs WHERE id = ?", (log_id,)).fetchone()
