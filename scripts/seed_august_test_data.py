@@ -111,6 +111,84 @@ def _remove_tagged_rows(conn: sqlite3.Connection) -> dict[str, int]:
     return counts
 
 
+def _month_bounds(year: int, month: int) -> tuple[str, str, str, str]:
+    start = datetime(year, month, 1, 6)
+    if month == 12:
+        end = datetime(year + 1, 1, 1, 6)
+    else:
+        end = datetime(year, month + 1, 1, 6)
+    return (
+        start.strftime("%Y-%m-%d %H:%M:%S"),
+        end.strftime("%Y-%m-%d %H:%M:%S"),
+        f"{year:04d}-{month:02d}-01",
+        end.strftime("%Y-%m-%d"),
+    )
+
+
+def _tagged_month_counts(conn: sqlite3.Connection, year: int, month: int) -> dict[str, int]:
+    start_at, end_at, start_date, end_date = _month_bounds(year, month)
+    return {
+        "billing_records": conn.execute(
+            """SELECT COUNT(*) FROM billing_records
+               WHERE data_tag = ? AND open_at >= ? AND open_at < ?""",
+            (DATA_TAG, start_at, end_at),
+        ).fetchone()[0],
+        "recharge_logs": conn.execute(
+            """SELECT COUNT(*) FROM recharge_logs
+               WHERE data_tag = ? AND business_date >= ? AND business_date < ?""",
+            (DATA_TAG, start_date, end_date),
+        ).fetchone()[0],
+    }
+
+
+def _remove_tagged_month(conn: sqlite3.Connection, year: int, month: int) -> dict[str, int]:
+    """Remove one generated month and reverse only its effects on test balances."""
+    start_at, end_at, start_date, end_date = _month_bounds(year, month)
+    counts = _tagged_month_counts(conn, year, month)
+    balance_changes: dict[int, float] = {}
+    for row in conn.execute(
+        """SELECT member_id, COALESCE(SUM(amount + gift_amount), 0) AS credited
+           FROM recharge_logs
+           WHERE data_tag = ? AND business_date >= ? AND business_date < ?
+           GROUP BY member_id""",
+        (DATA_TAG, start_date, end_date),
+    ).fetchall():
+        balance_changes[row[0]] = balance_changes.get(row[0], 0.0) - float(row[1] or 0)
+    for row in conn.execute(
+        """SELECT settlement_member_id, COALESCE(SUM(total), 0) AS spent
+           FROM billing_records
+           WHERE data_tag = ? AND payment_method = '会员余额'
+             AND open_at >= ? AND open_at < ? AND settlement_member_id IS NOT NULL
+           GROUP BY settlement_member_id""",
+        (DATA_TAG, start_at, end_at),
+    ).fetchall():
+        balance_changes[row[0]] = balance_changes.get(row[0], 0.0) + float(row[1] or 0)
+    for member_id, change in balance_changes.items():
+        conn.execute(
+            "UPDATE members SET balance = ROUND(balance + ?, 2) WHERE id = ? AND data_tag = ?",
+            (change, member_id, DATA_TAG),
+        )
+
+    billing_ids = [
+        row[0] for row in conn.execute(
+            """SELECT id FROM billing_records
+               WHERE data_tag = ? AND open_at >= ? AND open_at < ?""",
+            (DATA_TAG, start_at, end_at),
+        ).fetchall()
+    ]
+    if billing_ids:
+        placeholders = ",".join("?" for _ in billing_ids)
+        conn.execute(f"DELETE FROM billing_payments WHERE billing_id IN ({placeholders})", billing_ids)
+        conn.execute(f"DELETE FROM drink_orders WHERE billing_id IN ({placeholders})", billing_ids)
+        conn.execute(f"DELETE FROM billing_records WHERE id IN ({placeholders})", billing_ids)
+    conn.execute(
+        """DELETE FROM recharge_logs
+           WHERE data_tag = ? AND business_date >= ? AND business_date < ?""",
+        (DATA_TAG, start_date, end_date),
+    )
+    return counts
+
+
 def _phone(index: int) -> str:
     prefix = ZHOUKOU_PREFIXES[index % len(ZHOUKOU_PREFIXES)]
     suffix = 7000 + index // len(ZHOUKOU_PREFIXES)
@@ -172,19 +250,23 @@ def seed(year: int, month: int, replace: bool) -> dict:
     conn = get_db()
     conn.execute("BEGIN IMMEDIATE")
     try:
-        existing = conn.execute(
-            """SELECT
-                 (SELECT COUNT(*) FROM members WHERE data_tag = ?) AS members,
-                 (SELECT COUNT(*) FROM recharge_logs WHERE data_tag = ?) AS recharges,
-                 (SELECT COUNT(*) FROM billing_records WHERE data_tag = ?) AS bills""",
-            (DATA_TAG, DATA_TAG, DATA_TAG),
-        ).fetchone()
-        if any(existing) and not replace:
-            raise RuntimeError("已存在 data_tag=cs 的测试数据；如需重建请加 --replace")
-        removed = _remove_tagged_rows(conn) if any(existing) else {}
+        existing = _tagged_month_counts(conn, year, month)
+        if any(existing.values()) and not replace:
+            raise RuntimeError(
+                f"已存在 {year:04d}-{month:02d} 的 cs 测试数据；如需重建该月请加 --replace"
+            )
+        removed = _remove_tagged_month(conn, year, month) if any(existing.values()) else {}
 
-        members = []
-        for index, surname in enumerate(SURNAMES[:36]):
+        members = [dict(row) for row in conn.execute(
+            """SELECT id, name, phone, balance FROM members
+               WHERE data_tag = ? ORDER BY id LIMIT 36""",
+            (DATA_TAG,),
+        ).fetchall()]
+        for member in members:
+            member["balance"] = float(member["balance"] or 0)
+            member["recharged"] = False
+        for index in range(len(members), 36):
+            surname = SURNAMES[index]
             phone = _phone(index)
             created_at = datetime(year, month, 1) - timedelta(days=rng.randint(3, 60))
             opening_balance = 0 if index < len(RECHARGE_PLANS) else rng.choice((1000, 1500, 2000, 3000))
@@ -201,6 +283,9 @@ def seed(year: int, month: int, replace: bool) -> dict:
                 "id": cursor.lastrowid, "name": surname, "phone": phone,
                 "balance": float(opening_balance), "recharged": index < len(RECHARGE_PLANS),
             })
+
+        for index, member in enumerate(members):
+            member["recharged"] = index < len(RECHARGE_PLANS)
 
         recharge_events = []
         for index, (amount, gift) in enumerate(RECHARGE_PLANS):
