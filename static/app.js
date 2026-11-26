@@ -62,6 +62,21 @@ const API = {
 
 };
 
+async function fetchJsonWithTimeout(url, options={}, timeoutMs=15000){
+  const controller=new AbortController();
+  const timer=setTimeout(()=>controller.abort(),timeoutMs);
+  try{
+    const response=await fetch(url,{...options,signal:controller.signal});
+    const json=await response.json();
+    return {response,json};
+  }catch(error){
+    if(error.name==="AbortError")throw new Error("请求超时，请检查后端窗口是否有报错");
+    throw error;
+  }finally{
+    clearTimeout(timer);
+  }
+}
+
 
 
 
@@ -455,7 +470,7 @@ async function fetchCommissionReport(){
   const staffId=document.getElementById("commissionStaff").value||"0";
   clearCommissionReport("正在加载...");
   try{
-    const response=await fetch(API.commissionReport+"?month="+encodeURIComponent(input.value)+"&staff_id="+encodeURIComponent(staffId)),json=await response.json();
+    const {response,json}=await fetchJsonWithTimeout(API.commissionReport+"?month="+encodeURIComponent(input.value)+"&staff_id="+encodeURIComponent(staffId));
     if(requestId!==commissionRequestId)return;
     if(!response.ok||json.code!==0)throw new Error(json.detail||"提成加载失败");
     renderCommissionReport(json.data,staffId);
@@ -555,8 +570,7 @@ async function fetchDailyReport(){
   const tbody=document.querySelector("#dailyReportTable tbody");
   tbody.innerHTML='<tr><td colspan="10" class="empty-hint">正在加载...</td></tr>';
   try{
-    const response=await fetch(API.dailyReport+"?date="+encodeURIComponent(date));
-    const json=await response.json();
+    const {response,json}=await fetchJsonWithTimeout(API.dailyReport+"?date="+encodeURIComponent(date));
     if(!response.ok||json.code!==0)throw new Error(json.detail||"报表加载失败");
     renderDailyReport(json.data);
   }catch(e){
@@ -613,8 +627,7 @@ async function fetchMonthlyReport(){
   const tbody=document.querySelector("#monthlyReportTable tbody");
   tbody.innerHTML='<tr><td colspan="10" class="empty-hint">正在加载...</td></tr>';
   try{
-    const response=await fetch(API.monthlyReport+"?month="+encodeURIComponent(month));
-    const json=await response.json();
+    const {response,json}=await fetchJsonWithTimeout(API.monthlyReport+"?month="+encodeURIComponent(month));
     if(!response.ok||json.code!==0)throw new Error(json.detail||"月报加载失败");
     renderMonthlyReport(json.data);
   }catch(e){
@@ -2183,8 +2196,7 @@ async function fetchOpLogs(){
   input.value=date;
   try{
     const url=API.operationLogs+"?date="+encodeURIComponent(date)+"&limit=1000";
-    const response=await fetch(url,{headers:{"X-Records-Password":recordsSessionPassword}});
-    const json=await response.json();
+    const {response,json}=await fetchJsonWithTimeout(url,{headers:{"X-Records-Password":recordsSessionPassword}});
     if(!response.ok||json.code!==0)throw new Error(json.detail||"操作日志加载失败");
     document.getElementById("logsRange").textContent="统计范围："+json.start_at+" 至 "+json.end_at+"（不含结束时间）";
     renderOpLogs(json.data||[]);
@@ -2255,7 +2267,7 @@ async function fetchBillingHistory(){
   const date=input.value||_currentBusinessDate();
   input.value=date;
   try{
-    const response=await fetch(API.billingHistory+"?date="+encodeURIComponent(date)),json=await response.json();
+    const {response,json}=await fetchJsonWithTimeout(API.billingHistory+"?date="+encodeURIComponent(date));
     if(!response.ok||json.code!==0)throw new Error(json.detail||"结账记录加载失败");
     billingHistoryData=(json.data||[]).sort((a,b)=>_historyTimeValue(b.open_at||b.close_at)-_historyTimeValue(a.open_at||a.close_at)||b.id-a.id);
     document.getElementById("historyRange").textContent="统计范围："+json.start_at+" 至 "+json.end_at+"（不含结束时间）";
@@ -2268,7 +2280,7 @@ async function fetchBillingHistory(){
 
 async function fetchRechargeLogs(){
   try{
-    const response=await fetch(API.rechargeLogs),json=await response.json();
+    const {response,json}=await fetchJsonWithTimeout(API.rechargeLogs);
     if(!response.ok||json.code!==0)throw new Error(json.detail||"充卡记录加载失败");
     rechargeLogsData=(json.data||[]).sort((a,b)=>String(b.business_date||"").localeCompare(String(a.business_date||""))||_historyTimeValue(b.created_at)-_historyTimeValue(a.created_at)||b.id-a.id);
     renderRechargeLogs(rechargeLogsData);

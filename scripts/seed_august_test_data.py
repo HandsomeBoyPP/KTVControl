@@ -20,6 +20,8 @@ from database import DB_FILE, get_db, init_db  # noqa: E402
 
 DATA_TAG = "cs"
 RANDOM_SEED = 202608
+BILL_AMOUNTS = [188] * 5 + [380] * 4 + [480] * 21 + [580] * 27 + [600] * 3
+RECHARGE_PLANS = [(1000, 500)] * 5 + [(2000, 1200)] * 3 + [(5000, 3000)]
 SURNAMES = list(
     "赵钱孙李周吴郑王冯陈褚卫蒋沈韩杨朱秦尤许何吕施张孔曹严华金魏陶姜戚谢邹喻柏水窦章云苏潘葛奚范彭郎鲁韦昌马苗凤花方俞任袁柳鲍史唐费廉岑薛雷贺倪汤滕殷罗毕郝邬安常乐于时傅皮卞齐康伍余元卜顾孟平黄和穆萧尹姚邵湛汪祁毛禹狄米贝明臧计伏成戴谈宋茅庞熊纪舒屈项祝董梁杜阮蓝闵席季麻强贾路娄危江童颜郭梅盛林刁钟徐邱骆高夏蔡田樊胡凌霍虞万支柯昝管卢莫经房裘缪干解应宗丁宣邓郁单杭洪包诸左石崔吉龚程嵇邢裴陆荣翁荀羊甄魏家封芮羿储靳汲邴糜松井段富巫乌焦巴弓牧隗山谷车侯宓蓬全郗班仰秋仲伊宫宁仇栾暴甘厉戎祖武符刘景詹束龙叶幸司韶郜黎蓟薄印宿白怀蒲台从鄂索咸籍赖卓蔺屠蒙池乔阴胥能苍双闻莘党翟谭贡劳逄姬申扶堵冉宰郦雍却璩桑桂濮牛寿通边扈燕冀浦尚农温别庄晏柴瞿阎充慕连茹习宦艾鱼容向古易慎戈廖庾终暨居衡步都耿满弘匡国文寇广禄阙东欧沃利蔚越夔隆师巩厍聂晁勾敖融冷訾辛阚那简饶空曾毋沙乜养鞠须丰巢关蒯相查后荆红游竺权逯盖益桓公"
 )
@@ -115,29 +117,58 @@ def _phone(index: int) -> str:
     return f"{prefix}{suffix:04d}"
 
 
-def _distributed_amounts(rng: random.Random, total: int, count: int, minimum: int) -> list[int]:
-    weights = [rng.uniform(0.55, 1.65) for _ in range(count)]
-    available = total - minimum * count
-    amounts = [minimum + round(available * weight / sum(weights)) for weight in weights]
-    amounts[-1] += total - sum(amounts)
-    return amounts
-
-
-def _event_time(rng: random.Random, year: int, month: int, *, recharge: bool) -> datetime:
+def _business_day(rng: random.Random, year: int, month: int, *, recharge: bool = False) -> datetime:
     days = list(range(1, calendar.monthrange(year, month)[1] + 1))
+    if recharge:
+        days = days[: min(24, len(days))]
     weights = []
     for day in days:
         weekday = datetime(year, month, day).weekday()
         weights.append(2.4 if weekday in (4, 5) else 1.0)
     day = rng.choices(days, weights=weights, k=1)[0]
+    return datetime(year, month, day)
+
+
+def _night_time(rng: random.Random, business_day: datetime, *, recharge: bool = False) -> datetime:
+    """Return a natural late-night time belonging to the supplied business day."""
     if recharge:
-        return datetime(year, month, day, rng.randint(11, 22), rng.choice((0, 5, 10, 15, 20, 30, 40, 50)))
-    hour = rng.choices((13, 15, 17, 19, 20, 21, 22, 23), weights=(1, 1, 1, 3, 4, 5, 5, 3), k=1)[0]
-    return datetime(year, month, day, hour, rng.choice((0, 10, 20, 30, 40, 50)))
+        hour = rng.choices((22, 23, 24, 25, 26), weights=(3, 4, 3, 2, 1), k=1)[0]
+    else:
+        hour = rng.choices((22, 23, 24, 25, 26, 27, 28), weights=(2, 4, 5, 5, 4, 3, 2), k=1)[0]
+    minute = rng.randint(2, 58)
+    second = rng.choice((0, 0, 0, 12, 26, 38, 47))
+    return business_day + timedelta(hours=hour, minutes=minute, seconds=second)
 
 
-def seed(year: int, month: int, billing_total: int, recharge_total: int, replace: bool) -> dict:
-    rng = random.Random(RANDOM_SEED)
+def _billing_times(rng: random.Random, business_day: datetime) -> tuple[datetime, datetime, int]:
+    """Keep both opening and checkout in the 22:00-04:59 nightlife window."""
+    open_hour = rng.choices((22, 23, 24), weights=(5, 4, 1), k=1)[0]
+    opened = business_day + timedelta(
+        hours=open_hour,
+        minutes=rng.randint(2, 52),
+        seconds=rng.choice((0, 0, 12, 26, 38, 47)),
+    )
+    last_close = business_day + timedelta(hours=28, minutes=58)
+    max_duration = min(285, int((last_close - opened).total_seconds() // 60))
+    duration = rng.randint(90, max_duration)
+    return opened, opened + timedelta(minutes=duration), duration
+
+
+def _parse_month(value: str) -> tuple[int, int]:
+    value = value.strip()
+    for fmt in ("%Y-%m", "%Y/%m"):
+        try:
+            parsed = datetime.strptime(value, fmt)
+            return parsed.year, parsed.month
+        except ValueError:
+            pass
+    if value.isdigit() and 1 <= int(value) <= 12:
+        return 2026, int(value)
+    raise ValueError("月份格式不正确，请输入 YYYY-MM，例如 2026-08")
+
+
+def seed(year: int, month: int, replace: bool) -> dict:
+    rng = random.Random(RANDOM_SEED + year * 100 + month)
     conn = get_db()
     conn.execute("BEGIN IMMEDIATE")
     try:
@@ -156,37 +187,47 @@ def seed(year: int, month: int, billing_total: int, recharge_total: int, replace
         for index, surname in enumerate(SURNAMES[:36]):
             phone = _phone(index)
             created_at = datetime(year, month, 1) - timedelta(days=rng.randint(3, 60))
+            opening_balance = 0 if index < len(RECHARGE_PLANS) else rng.choice((1000, 1500, 2000, 3000))
             cursor = conn.execute(
                 """INSERT INTO members
                    (name, phone, password, balance, level, remark, data_tag, created_at)
-                   VALUES (?, ?, ?, 0, '会员', '八月测试会员', ?, ?)""",
-                (surname, phone, phone[-4:], DATA_TAG, created_at.strftime("%Y-%m-%d %H:%M:%S")),
+                   VALUES (?, ?, ?, ?, '会员', NULL, ?, ?)""",
+                (
+                    surname, phone, phone[-4:], opening_balance, DATA_TAG,
+                    created_at.strftime("%Y-%m-%d %H:%M:%S"),
+                ),
             )
-            members.append({"id": cursor.lastrowid, "name": surname, "phone": phone, "balance": 0.0})
+            members.append({
+                "id": cursor.lastrowid, "name": surname, "phone": phone,
+                "balance": float(opening_balance), "recharged": index < len(RECHARGE_PLANS),
+            })
 
-        recharge_amounts = _distributed_amounts(rng, recharge_total, 24, 300)
         recharge_events = []
-        for index, amount in enumerate(recharge_amounts):
+        for index, (amount, gift) in enumerate(RECHARGE_PLANS):
+            business_day = _business_day(rng, year, month, recharge=True)
             recharge_events.append({
                 "kind": "recharge",
-                "time": _event_time(rng, year, month, recharge=True),
-                "member": members[index % 24],
+                "time": _night_time(rng, business_day, recharge=True),
+                "business_date": business_day.strftime("%Y-%m-%d"),
+                "member": members[index],
                 "amount": amount,
-                "gift": rng.choice((0, 0, 0, 50, 100)),
+                "gift": gift,
                 "method": rng.choices(("微信", "支付宝", "现金"), weights=(6, 2, 2), k=1)[0],
             })
 
-        bill_amounts = _distributed_amounts(rng, billing_total, 68, 168)
+        bill_amounts = BILL_AMOUNTS.copy()
+        rng.shuffle(bill_amounts)
         bill_events = []
-        methods = ["微信"] * 31 + ["会员余额"] * 20 + ["支付宝"] * 10 + ["现金"] * 7
+        methods = ["微信"] * 24 + ["会员余额"] * 36
         rng.shuffle(methods)
         for amount, method in zip(bill_amounts, methods):
-            opened = _event_time(rng, year, month, recharge=False)
-            duration = rng.choice((120, 180, 240, 300, 360))
+            business_day = _business_day(rng, year, month)
+            opened, closed, duration = _billing_times(rng, business_day)
             bill_events.append({
                 "kind": "bill",
-                "time": opened,
-                "close_time": opened + timedelta(minutes=duration),
+                "time": closed,
+                "open_time": opened,
+                "close_time": closed,
                 "duration": duration,
                 "amount": amount,
                 "method": method,
@@ -210,10 +251,10 @@ def seed(year: int, month: int, billing_total: int, recharge_total: int, replace
                        (member_id, member_name, member_phone, amount, gift_amount,
                         balance_after, payment_method, detail, notes, business_date,
                         data_tag, created_at)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, '会员充卡', '八月测试充值', ?, ?, ?)""",
+                       VALUES (?, ?, ?, ?, ?, ?, ?, '会员充卡', NULL, ?, ?, ?)""",
                     (
                         member["id"], member["name"], member["phone"], event["amount"],
-                        event["gift"], after, event["method"], event["time"].strftime("%Y-%m-%d"),
+                        event["gift"], after, event["method"], event["business_date"],
                         DATA_TAG, occurred,
                     ),
                 )
@@ -227,7 +268,12 @@ def seed(year: int, month: int, billing_total: int, recharge_total: int, replace
             if method == "会员余额":
                 candidates = [item for item in members if item["balance"] >= amount]
                 if candidates:
-                    member = rng.choice(candidates)
+                    if amount >= 580:
+                        recharged = [item for item in candidates if item["recharged"]]
+                        member = rng.choice(recharged or candidates)
+                    else:
+                        non_recharged = [item for item in candidates if not item["recharged"]]
+                        member = rng.choice(non_recharged or candidates)
                     member["balance"] = round(member["balance"] - amount, 2)
                     balance_after = member["balance"]
                 else:
@@ -236,7 +282,7 @@ def seed(year: int, month: int, billing_total: int, recharge_total: int, replace
                 member = rng.choice(members)
                 balance_after = member["balance"]
 
-            opened = event["time"].strftime("%Y-%m-%d %H:%M:%S")
+            opened = event["open_time"].strftime("%Y-%m-%d %H:%M:%S")
             closed = event["close_time"].strftime("%Y-%m-%d %H:%M:%S")
             cursor = conn.execute(
                 """INSERT INTO billing_records
@@ -245,7 +291,7 @@ def seed(year: int, month: int, billing_total: int, recharge_total: int, replace
                     settlement_member_id, settlement_member_name, settlement_member_phone,
                     member_balance_after, notes, data_tag, created_at)
                    VALUES (?, ?, ?, ?, ?, 0, ?, ?, 'closed', ?, ?, ?, ?, ?, ?,
-                           '八月测试结账', ?, ?)""",
+                           NULL, ?, ?)""",
                 (
                     event["room"], opened, closed, event["duration"], amount, amount, method,
                     "member" if member else "retail", member["id"] if member else None,
@@ -271,9 +317,10 @@ def seed(year: int, month: int, billing_total: int, recharge_total: int, replace
             "removed": removed,
             "members": len(members),
             "recharges": inserted_recharges,
-            "recharge_total": recharge_total,
+            "recharge_total": sum(item[0] for item in RECHARGE_PLANS),
+            "gift_total": sum(item[1] for item in RECHARGE_PLANS),
             "bills": inserted_bills,
-            "billing_total": billing_total,
+            "billing_total": sum(BILL_AMOUNTS),
             "payment_counts": payment_counts,
         }
     except Exception:
@@ -299,32 +346,35 @@ def clean() -> dict[str, int]:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="导入带 cs 标记的八月测试数据")
-    parser.add_argument("--year", type=int, default=2026)
-    parser.add_argument("--month", type=int, default=8, choices=range(1, 13))
-    parser.add_argument("--billing-total", type=int, default=30_000)
-    parser.add_argument("--recharge-total", type=int, default=20_000)
+    parser = argparse.ArgumentParser(description="按月份导入带 cs 标记的测试数据")
+    parser.add_argument("--month", help="测试月份，格式 YYYY-MM；不填写时运行后交互输入")
     parser.add_argument("--replace", action="store_true", help="只删除并重建 data_tag=cs 的数据")
     parser.add_argument("--clean", action="store_true", help="只删除 data_tag=cs 的测试数据，不再导入")
     args = parser.parse_args()
 
-    if args.billing_total < 68 * 168:
-        parser.error("结账总额过低，至少需要 11424 元")
-    if args.recharge_total < 24 * 300:
-        parser.error("充值总额过低，至少需要 7200 元")
-
-    backup = _backup_database()
-    _ensure_seed_schema()
     if args.clean:
+        backup = _backup_database()
+        _ensure_seed_schema()
         removed = clean()
         print(f"备份: {backup or '新数据库，无需备份'}")
         print(f"已清理 data_tag={DATA_TAG}: {removed}")
         return
-    result = seed(args.year, args.month, args.billing_total, args.recharge_total, args.replace)
+    month_value = args.month or input("请输入测试月份（YYYY-MM，例如 2026-08）：")
+    try:
+        year, month = _parse_month(month_value)
+    except ValueError as exc:
+        parser.error(str(exc))
+    backup = _backup_database()
+    _ensure_seed_schema()
+    result = seed(year, month, args.replace)
     print(f"备份: {backup or '新数据库，无需备份'}")
     print(f"测试标记: data_tag={DATA_TAG}")
+    print(f"测试月份: {year:04d}-{month:02d}")
     print(f"新增会员: {result['members']}")
-    print(f"新增充值: {result['recharges']} 笔，实充合计 {result['recharge_total']:.2f} 元")
+    print(
+        f"新增充值: {result['recharges']} 笔，实充 {result['recharge_total']:.2f} 元，"
+        f"赠送 {result['gift_total']:.2f} 元"
+    )
     print(f"新增结账: {result['bills']} 笔，合计 {result['billing_total']:.2f} 元")
     print(f"结账方式: {result['payment_counts']}")
 

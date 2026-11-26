@@ -563,7 +563,7 @@ def _recharge_business_date(value=None, *, fallback_time: datetime | None = None
 
 
 @app.get("/api/recharge-logs")
-async def list_recharge_logs():
+def list_recharge_logs():
     conn = get_db()
     try:
         rows = conn.execute(
@@ -1873,7 +1873,7 @@ def _build_daily_business_report(date: str = "") -> dict:
 
 
 @app.get("/api/reports/daily")
-async def get_daily_business_report(date: str = ""):
+def get_daily_business_report(date: str = ""):
     return _build_daily_business_report(date)
 
 
@@ -1922,7 +1922,7 @@ def _calculate_staff_commission(amount, rule: dict) -> dict:
 
 
 @app.get("/api/reports/commissions")
-async def get_staff_commission_report(month: str = "", staff_id: int = 0):
+def get_staff_commission_report(month: str = "", staff_id: int = 0):
     if staff_id < 0:
         raise HTTPException(400, "人员筛选无效")
     start_at, end_at = _month_business_bounds(month)
@@ -2067,7 +2067,7 @@ def _actual_payment_category(method: str) -> str:
 
 
 @app.get("/api/reports/monthly")
-async def get_monthly_business_report(month: str = ""):
+def get_monthly_business_report(month: str = ""):
     start_at, end_at = _month_business_bounds(month)
     start_text = start_at.strftime("%Y-%m-%d %H:%M:%S")
     end_text = end_at.strftime("%Y-%m-%d %H:%M:%S")
@@ -2165,7 +2165,7 @@ async def get_monthly_business_report(month: str = ""):
 # ---- Billing History Routes ----
 
 @app.get("/api/billing/history")
-async def list_billing_history(date: str = ""):
+def list_billing_history(date: str = ""):
     start_at, end_at = _business_day_bounds(date)
     start_text = start_at.strftime("%Y-%m-%d %H:%M:%S")
     end_text = end_at.strftime("%Y-%m-%d %H:%M:%S")
@@ -2318,7 +2318,7 @@ async def verify_log_delete_access(req: VerifyLogDeleteRequest):
 # ---- Operation Log Routes ----
 
 @app.get("/api/operation-logs")
-async def list_operation_logs(date: str = "", limit: int = 1000, x_records_password: str = Header(default="")):
+def list_operation_logs(date: str = "", limit: int = 1000, x_records_password: str = Header(default="")):
     if not verify_records_password(x_records_password):
         raise HTTPException(403, "记录查看密码错误")
     start_at, end_at = _business_day_bounds(date)
