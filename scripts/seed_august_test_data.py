@@ -7,6 +7,7 @@ import calendar
 import random
 import sqlite3
 from datetime import datetime, timedelta
+from functools import lru_cache
 from pathlib import Path
 
 import sys
@@ -245,8 +246,53 @@ def _parse_month(value: str) -> tuple[int, int]:
     raise ValueError("月份格式不正确，请输入 YYYY-MM，例如 2026-08")
 
 
-def seed(year: int, month: int, replace: bool) -> dict:
-    rng = random.Random(RANDOM_SEED + year * 100 + month)
+def _build_bill_amounts(total: int, rng: random.Random) -> list[int]:
+    """Build an exact, natural-looking mix from the allowed checkout prices."""
+    if total < 3000:
+        raise ValueError("月结账总额不能低于3000元")
+    if total % 4:
+        raise ValueError("受现有金额档位限制，月结账总额必须是4的倍数")
+    base_copies, remainder = divmod(total, 30_000)
+    if remainder and remainder < 3000 and base_copies:
+        base_copies -= 1
+        remainder += 30_000
+    amounts = BILL_AMOUNTS * base_copies
+    if remainder == 0:
+        rng.shuffle(amounts)
+        return amounts
+
+    denominations = (580, 480, 600, 380, 188, 88)
+    preferred_count = max(1, round(remainder / 500))
+    candidate_counts = sorted(
+        range(max(1, preferred_count - 18), preferred_count + 19),
+        key=lambda count: abs(count - preferred_count),
+    )
+    for count in candidate_counts:
+        if not 88 * count <= remainder <= 600 * count:
+            continue
+
+        @lru_cache(maxsize=None)
+        def solve(remaining: int, slots: int) -> tuple[int, ...] | None:
+            if slots == 0:
+                return () if remaining == 0 else None
+            if remaining < 88 * slots or remaining > 600 * slots:
+                return None
+            for amount in denominations:
+                result = solve(remaining - amount, slots - 1)
+                if result is not None:
+                    return (amount,) + result
+            return None
+
+        result = solve(remainder, count)
+        if result is not None:
+            amounts.extend(result)
+            rng.shuffle(amounts)
+            return amounts
+    raise ValueError("无法使用现有金额档位组合出该总额，请换一个4的倍数金额")
+
+
+def seed(year: int, month: int, billing_total: int, replace: bool) -> dict:
+    rng = random.Random(RANDOM_SEED + year * 100 + month + billing_total)
     conn = get_db()
     conn.execute("BEGIN IMMEDIATE")
     try:
@@ -300,10 +346,11 @@ def seed(year: int, month: int, replace: bool) -> dict:
                 "method": rng.choices(("微信", "支付宝", "现金"), weights=(6, 2, 2), k=1)[0],
             })
 
-        bill_amounts = BILL_AMOUNTS.copy()
-        rng.shuffle(bill_amounts)
+        bill_amounts = _build_bill_amounts(billing_total, rng)
         bill_events = []
-        regular_methods = ["微信"] * 22 + ["会员余额"] * 33
+        regular_count = sum(amount not in (88, 188) for amount in bill_amounts)
+        wechat_count = round(regular_count * 0.4)
+        regular_methods = ["微信"] * wechat_count + ["会员余额"] * (regular_count - wechat_count)
         rng.shuffle(regular_methods)
         methods = ["美团" if amount in (88, 188) else regular_methods.pop() for amount in bill_amounts]
         for amount, method in zip(bill_amounts, methods):
@@ -406,7 +453,7 @@ def seed(year: int, month: int, replace: bool) -> dict:
             "recharge_total": sum(item[0] for item in RECHARGE_PLANS),
             "gift_total": sum(item[1] for item in RECHARGE_PLANS),
             "bills": inserted_bills,
-            "billing_total": sum(BILL_AMOUNTS),
+            "billing_total": sum(bill_amounts),
             "payment_counts": payment_counts,
         }
     except Exception:
@@ -434,6 +481,7 @@ def clean() -> dict[str, int]:
 def main() -> None:
     parser = argparse.ArgumentParser(description="按月份导入带 cs 标记的测试数据")
     parser.add_argument("--month", help="测试月份，格式 YYYY-MM；不填写时运行后交互输入")
+    parser.add_argument("--total", type=int, help="该月结账总额；不填写时运行后交互输入")
     parser.add_argument("--replace", action="store_true", help="只删除并重建 data_tag=cs 的数据")
     parser.add_argument("--clean", action="store_true", help="只删除 data_tag=cs 的测试数据，不再导入")
     args = parser.parse_args()
@@ -450,9 +498,20 @@ def main() -> None:
         year, month = _parse_month(month_value)
     except ValueError as exc:
         parser.error(str(exc))
+    total_value = args.total
+    if total_value is None:
+        entered = input("请输入该月结账总额（元，直接回车默认30000）：").strip()
+        try:
+            total_value = int(entered) if entered else 30_000
+        except ValueError:
+            parser.error("结账总额必须是整数金额")
+    try:
+        _build_bill_amounts(total_value, random.Random(0))
+    except ValueError as exc:
+        parser.error(str(exc))
     backup = _backup_database()
     _ensure_seed_schema()
-    result = seed(year, month, args.replace)
+    result = seed(year, month, total_value, args.replace)
     print(f"备份: {backup or '新数据库，无需备份'}")
     print(f"测试标记: data_tag={DATA_TAG}")
     print(f"测试月份: {year:04d}-{month:02d}")
