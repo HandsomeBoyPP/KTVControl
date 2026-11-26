@@ -1102,10 +1102,15 @@ async function fetchMembers(){try{const r=await fetch(API.members);const j=await
 function renderMembers(){
   const tb=document.querySelector("#membersTable tbody");
   if(!membersData.length){tb.innerHTML='<tr><td colspan="6" class="empty-hint">暂无会员数据</td></tr>';return;}
+  const memberCreatedTime=value=>{
+    const parts=String(value||"").match(/\d+/g)||[];
+    if(parts.length<3)return 0;
+    const normalized=[parts[0].padStart(4,"0"),...parts.slice(1,6).map(part=>part.padStart(2,"0"))];
+    while(normalized.length<6)normalized.push("00");
+    return Number(normalized.join(""));
+  };
   membersData.sort((a,b)=>{
-    const aTime=String(a.created_at||"").trim().replace("T"," ").substring(0,19);
-    const bTime=String(b.created_at||"").trim().replace("T"," ").substring(0,19);
-    return bTime.localeCompare(aTime)||Number(b.id||0)-Number(a.id||0);
+    return memberCreatedTime(b.created_at)-memberCreatedTime(a.created_at)||Number(b.id||0)-Number(a.id||0);
   });
   tb.innerHTML=membersData.map(m=>{
     const cr=m.created_at?m.created_at.replace("T"," ").substring(0,19):"-";
