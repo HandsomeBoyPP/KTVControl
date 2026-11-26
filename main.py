@@ -404,7 +404,11 @@ async def cancel_booking(booking_id: str):
 async def list_members():
     conn = get_db()
     try:
-        rows = conn.execute("SELECT id, name, phone, balance, remark, created_at FROM members ORDER BY id DESC").fetchall()
+        rows = conn.execute(
+            """SELECT id, name, phone, balance, remark, created_at
+               FROM members
+               ORDER BY datetime(created_at) DESC, id DESC"""
+        ).fetchall()
         return {"code": 0, "data": [dict(r) for r in rows]}
     finally:
         conn.close()
