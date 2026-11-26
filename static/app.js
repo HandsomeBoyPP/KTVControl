@@ -1095,7 +1095,7 @@ async function cancelBooking(id){if(!confirm("确认取消预订？"))return;try
 
 
 
-async function fetchMembers(){try{const r=await fetch(API.members);const j=await r.json();if(j.code===0){membersData=j.data;renderMembers();}}catch(e){}}
+async function fetchMembers(){try{const r=await fetch(API.members);const j=await r.json();if(j.code===0){membersData=(j.data||[]).sort((a,b)=>String(b.created_at||"").localeCompare(String(a.created_at||""))||Number(b.id||0)-Number(a.id||0));renderMembers();}}catch(e){}}
 
 
 
