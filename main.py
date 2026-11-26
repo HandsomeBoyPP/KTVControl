@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import re
 import sqlite3
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
@@ -400,16 +401,22 @@ async def cancel_booking(booking_id: str):
 
 # ---- Member Routes ----
 
+def _member_created_time_key(value) -> tuple[int, int, int, int, int, int]:
+    parts = [int(part) for part in re.findall(r"\d+", str(value or ""))[:6]]
+    parts.extend([0] * (6 - len(parts)))
+    return tuple(parts)
+
 @app.get("/api/members")
 async def list_members():
     conn = get_db()
     try:
         rows = conn.execute(
             """SELECT id, name, phone, balance, remark, created_at
-               FROM members
-               ORDER BY datetime(created_at) DESC"""
+               FROM members"""
         ).fetchall()
-        return {"code": 0, "data": [dict(r) for r in rows]}
+        members = [dict(row) for row in rows]
+        members.sort(key=lambda member: _member_created_time_key(member["created_at"]), reverse=True)
+        return {"code": 0, "data": members}
     finally:
         conn.close()
 
