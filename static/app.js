@@ -297,7 +297,8 @@ document.addEventListener("keydown",function(e){
 });
 
 document.addEventListener("keydown",function(e){
-  if(!e.ctrlKey||e.altKey||e.repeat||!["Backslash","IntlBackslash"].includes(e.code))return;
+  const isBackslash=e.key==="\\"||e.key==="|"||["Backslash","IntlBackslash"].includes(e.code);
+  if(!e.ctrlKey||e.altKey||e.repeat||!isBackslash)return;
   e.preventDefault();
   if(recordsVisible){
     recordsVisible=false;
