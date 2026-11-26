@@ -196,8 +196,15 @@ def _phone(index: int) -> str:
     return f"{prefix}{suffix:04d}"
 
 
-def _business_day(rng: random.Random, year: int, month: int, *, recharge: bool = False) -> datetime:
-    days = list(range(1, calendar.monthrange(year, month)[1] + 1))
+def _business_day(
+    rng: random.Random,
+    year: int,
+    month: int,
+    *,
+    recharge: bool = False,
+    min_day: int = 1,
+) -> datetime:
+    days = list(range(max(1, min_day), calendar.monthrange(year, month)[1] + 1))
     if recharge:
         days = days[: min(24, len(days))]
     weights = []
@@ -206,6 +213,14 @@ def _business_day(rng: random.Random, year: int, month: int, *, recharge: bool =
         weights.append(2.4 if weekday in (4, 5) else 1.0)
     day = rng.choices(days, weights=weights, k=1)[0]
     return datetime(year, month, day)
+
+
+def _member_created_at(rng: random.Random, year: int, month: int) -> datetime:
+    max_day = min(20, calendar.monthrange(year, month)[1])
+    return datetime(
+        year, month, rng.randint(1, max_day), rng.randint(10, 20),
+        rng.randint(1, 58), rng.choice((0, 0, 12, 26, 38, 47)),
+    )
 
 
 def _night_time(rng: random.Random, business_day: datetime, *, recharge: bool = False) -> datetime:
@@ -303,18 +318,36 @@ def seed(year: int, month: int, billing_total: int, replace: bool) -> dict:
             )
         removed = _remove_tagged_month(conn, year, month) if any(existing.values()) else {}
 
+        start_at, _, start_date, _ = _month_bounds(year, month)
+        has_prior_activity = bool(conn.execute(
+            """SELECT
+                 EXISTS(SELECT 1 FROM billing_records
+                        WHERE data_tag = ? AND open_at < ?)
+                 OR EXISTS(SELECT 1 FROM recharge_logs
+                           WHERE data_tag = ? AND business_date < ?)""",
+            (DATA_TAG, start_at, DATA_TAG, start_date),
+        ).fetchone()[0])
+
         members = [dict(row) for row in conn.execute(
-            """SELECT id, name, phone, balance FROM members
+            """SELECT id, name, phone, balance, created_at FROM members
                WHERE data_tag = ? ORDER BY id LIMIT 36""",
             (DATA_TAG,),
         ).fetchall()]
-        for member in members:
+        for index, member in enumerate(members):
+            if not has_prior_activity:
+                created_at = _member_created_at(rng, year, month)
+                conn.execute(
+                    "UPDATE members SET created_at = ? WHERE id = ? AND data_tag = ?",
+                    (created_at.strftime("%Y-%m-%d %H:%M:%S"), member["id"], DATA_TAG),
+                )
+                member["created_at"] = created_at.strftime("%Y-%m-%d %H:%M:%S")
+            member["created_at_dt"] = datetime.fromisoformat(member["created_at"])
             member["balance"] = float(member["balance"] or 0)
             member["recharged"] = False
         for index in range(len(members), 36):
             surname = SURNAMES[index]
             phone = _phone(index)
-            created_at = datetime(year, month, 1) - timedelta(days=rng.randint(3, 60))
+            created_at = _member_created_at(rng, year, month)
             opening_balance = 0 if index < len(RECHARGE_PLANS) else rng.choice((1000, 1500, 2000, 3000))
             cursor = conn.execute(
                 """INSERT INTO members
@@ -328,6 +361,8 @@ def seed(year: int, month: int, billing_total: int, replace: bool) -> dict:
             members.append({
                 "id": cursor.lastrowid, "name": surname, "phone": phone,
                 "balance": float(opening_balance), "recharged": index < len(RECHARGE_PLANS),
+                "created_at": created_at.strftime("%Y-%m-%d %H:%M:%S"),
+                "created_at_dt": created_at,
             })
 
         for index, member in enumerate(members):
@@ -335,12 +370,15 @@ def seed(year: int, month: int, billing_total: int, replace: bool) -> dict:
 
         recharge_events = []
         for index, (amount, gift) in enumerate(RECHARGE_PLANS):
-            business_day = _business_day(rng, year, month, recharge=True)
+            member = members[index]
+            member_created = member["created_at_dt"]
+            min_day = member_created.day if (member_created.year, member_created.month) == (year, month) else 1
+            business_day = _business_day(rng, year, month, recharge=True, min_day=min_day)
             recharge_events.append({
                 "kind": "recharge",
                 "time": _night_time(rng, business_day, recharge=True),
                 "business_date": business_day.strftime("%Y-%m-%d"),
-                "member": members[index],
+                "member": member,
                 "amount": amount,
                 "gift": gift,
                 "method": rng.choices(("微信", "支付宝", "现金"), weights=(6, 2, 2), k=1)[0],
@@ -398,8 +436,11 @@ def seed(year: int, month: int, billing_total: int, replace: bool) -> dict:
             amount = float(event["amount"])
             member = None
             balance_after = None
+            eligible_members = [
+                item for item in members if item["created_at_dt"] <= event["time"]
+            ]
             if method == "会员余额":
-                candidates = [item for item in members if item["balance"] >= amount]
+                candidates = [item for item in eligible_members if item["balance"] >= amount]
                 if candidates:
                     if amount >= 580:
                         recharged = [item for item in candidates if item["recharged"]]
@@ -411,8 +452,8 @@ def seed(year: int, month: int, billing_total: int, replace: bool) -> dict:
                     balance_after = member["balance"]
                 else:
                     method = "微信"
-            elif rng.random() < 0.55:
-                member = rng.choice(members)
+            elif eligible_members and rng.random() < 0.55:
+                member = rng.choice(eligible_members)
                 balance_after = member["balance"]
 
             opened = event["open_time"].strftime("%Y-%m-%d %H:%M:%S")
