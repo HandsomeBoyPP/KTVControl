@@ -407,7 +407,7 @@ async def list_members():
         rows = conn.execute(
             """SELECT id, name, phone, balance, remark, created_at
                FROM members
-               ORDER BY datetime(created_at) DESC, id DESC"""
+               ORDER BY datetime(created_at) DESC"""
         ).fetchall()
         return {"code": 0, "data": [dict(r) for r in rows]}
     finally:

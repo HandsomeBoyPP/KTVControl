@@ -1110,7 +1110,7 @@ function renderMembers(){
     return Number(normalized.join(""));
   };
   membersData.sort((a,b)=>{
-    return memberCreatedTime(b.created_at)-memberCreatedTime(a.created_at)||Number(b.id||0)-Number(a.id||0);
+    return memberCreatedTime(b.created_at)-memberCreatedTime(a.created_at);
   });
   tb.innerHTML=membersData.map(m=>{
     const cr=m.created_at?m.created_at.replace("T"," ").substring(0,19):"-";
