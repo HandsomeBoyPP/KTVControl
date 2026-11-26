@@ -563,9 +563,7 @@ def _recharge_business_date(value=None, *, fallback_time: datetime | None = None
 
 
 @app.get("/api/recharge-logs")
-async def list_recharge_logs(x_records_password: str = Header(default="")):
-    if not verify_records_password(x_records_password):
-        raise HTTPException(403, "记录查看密码错误")
+async def list_recharge_logs():
     conn = get_db()
     try:
         rows = conn.execute(
@@ -1875,9 +1873,7 @@ def _build_daily_business_report(date: str = "") -> dict:
 
 
 @app.get("/api/reports/daily")
-async def get_daily_business_report(date: str = "", x_records_password: str = Header(default="")):
-    if not verify_records_password(x_records_password):
-        raise HTTPException(403, "记录查看密码错误")
+async def get_daily_business_report(date: str = ""):
     return _build_daily_business_report(date)
 
 
@@ -1926,9 +1922,7 @@ def _calculate_staff_commission(amount, rule: dict) -> dict:
 
 
 @app.get("/api/reports/commissions")
-async def get_staff_commission_report(month: str = "", staff_id: int = 0, x_records_password: str = Header(default="")):
-    if not verify_records_password(x_records_password):
-        raise HTTPException(403, "记录查看密码错误")
+async def get_staff_commission_report(month: str = "", staff_id: int = 0):
     if staff_id < 0:
         raise HTTPException(400, "人员筛选无效")
     start_at, end_at = _month_business_bounds(month)
@@ -2073,9 +2067,7 @@ def _actual_payment_category(method: str) -> str:
 
 
 @app.get("/api/reports/monthly")
-async def get_monthly_business_report(month: str = "", x_records_password: str = Header(default="")):
-    if not verify_records_password(x_records_password):
-        raise HTTPException(403, "记录查看密码错误")
+async def get_monthly_business_report(month: str = ""):
     start_at, end_at = _month_business_bounds(month)
     start_text = start_at.strftime("%Y-%m-%d %H:%M:%S")
     end_text = end_at.strftime("%Y-%m-%d %H:%M:%S")

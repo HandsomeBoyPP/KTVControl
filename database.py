@@ -88,6 +88,7 @@ def init_db():
             balance REAL DEFAULT 0,
             level TEXT DEFAULT '会员',
             remark TEXT,
+            data_tag TEXT,
             created_at TEXT DEFAULT (datetime('now', 'localtime'))
         );
         CREATE TABLE IF NOT EXISTS recharge_logs (
@@ -105,6 +106,7 @@ def init_db():
             performance_staff_name TEXT,
             performance_commission_rule TEXT,
             business_date TEXT,
+            data_tag TEXT,
             created_at TEXT DEFAULT (datetime('now', 'localtime')),
             FOREIGN KEY (member_id) REFERENCES members(id)
         );
@@ -194,6 +196,7 @@ def init_db():
             settlement_member_phone TEXT,
             draft_member_phone TEXT,
             member_balance_after REAL,
+            data_tag TEXT,
             status TEXT DEFAULT 'open',
             created_at TEXT DEFAULT (datetime('now', 'localtime'))
         );
@@ -293,6 +296,7 @@ def init_db():
     _migrate_billing_columns(conn)
     _migrate_device_command_columns(conn)
     _migrate_management_columns(conn)
+    _migrate_test_data_tags(conn)
     load_config()
     conn.commit()
     conn.close()
@@ -440,6 +444,20 @@ def _migrate_device_command_columns(conn: sqlite3.Connection):
     columns = {row[1] for row in conn.execute("PRAGMA table_info(device_commands)").fetchall()}
     if "retryable" not in columns:
         conn.execute("ALTER TABLE device_commands ADD COLUMN retryable INTEGER NOT NULL DEFAULT 1")
+
+
+def _migrate_test_data_tags(conn: sqlite3.Connection):
+    """Tag generated rows without changing any existing business data."""
+    for table_name in ("members", "recharge_logs", "billing_records"):
+        columns = {
+            row[1] for row in conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+        }
+        if "data_tag" not in columns:
+            conn.execute(f"ALTER TABLE {table_name} ADD COLUMN data_tag TEXT")
+        conn.execute(
+            f"CREATE INDEX IF NOT EXISTS idx_{table_name}_data_tag "
+            f"ON {table_name}(data_tag)"
+        )
 
 def get_db() -> sqlite3.Connection:
     conn = sqlite3.connect(str(DB_FILE))

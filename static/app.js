@@ -97,15 +97,9 @@ function applyAdminToolsVisibility(){
 
 
 function applyRecordsVisibility(){
-  document.querySelectorAll(".records-access-only").forEach(button=>{
+  document.querySelectorAll(".operation-logs-access-only").forEach(button=>{
     button.style.display=recordsVisible?"":"none";
   });
-  if(!recordsVisible){
-    commissionRequestId++;
-    clearCommissionReport("请按 Ctrl+\\ 验证记录查看密码");
-    const select=document.getElementById("commissionStaff");
-    if(select)select.innerHTML='<option value="0">全部人员</option>';
-  }
 }
 
 async function confirmRecordsAccess(){
@@ -121,7 +115,7 @@ async function confirmRecordsAccess(){
     applyRecordsVisibility();
     closeModal("recordsAccessModal");
     input.value="";
-    if(activeTab!=="staff")switchTab("reports");
+    switchTab("logs");
   }catch(e){alert("验证失败: "+e);}
 }
 
@@ -294,7 +288,7 @@ document.addEventListener("keydown",function(e){
     recordsVisible=false;
     recordsSessionPassword="";
     applyRecordsVisibility();
-    if(["reports","recharges","logs","commissions"].includes(activeTab))switchTab("rooms");
+    if(activeTab==="logs")switchTab("rooms");
     return;
   }
   const input=document.getElementById("recordsAccessPassword");
@@ -354,7 +348,6 @@ function clearPolling(){pollingTimers.forEach(clearInterval);pollingTimers=[];}
 function addPolling(fn, interval){pollingTimers.push(setInterval(fn, interval));}
 
 function switchTab(tab){
-  if(tab==="commissions"&&!recordsVisible)tab="rooms";
   activeTab=tab;
   document.querySelectorAll(".tab-btn").forEach(b=>b.classList.toggle("active",b.dataset.tab===tab));
   document.querySelectorAll(".tab-panel").forEach(p=>p.classList.toggle("active",p.id==="tab-"+tab));
@@ -457,18 +450,17 @@ function changeCommissionMonth(offset){
 }
 
 async function fetchCommissionReport(){
-  if(!recordsVisible||!recordsSessionPassword){clearCommissionReport("请先验证记录查看密码");return;}
   const requestId=++commissionRequestId,input=document.getElementById("commissionMonth");
   input.value=input.value||_currentBusinessDate().substring(0,7);
   const staffId=document.getElementById("commissionStaff").value||"0";
   clearCommissionReport("正在加载...");
   try{
-    const response=await fetch(API.commissionReport+"?month="+encodeURIComponent(input.value)+"&staff_id="+encodeURIComponent(staffId),{headers:{"X-Records-Password":recordsSessionPassword}}),json=await response.json();
-    if(requestId!==commissionRequestId||!recordsVisible)return;
+    const response=await fetch(API.commissionReport+"?month="+encodeURIComponent(input.value)+"&staff_id="+encodeURIComponent(staffId)),json=await response.json();
+    if(requestId!==commissionRequestId)return;
     if(!response.ok||json.code!==0)throw new Error(json.detail||"提成加载失败");
     renderCommissionReport(json.data,staffId);
   }catch(e){
-    if(requestId===commissionRequestId&&recordsVisible)clearCommissionReport("提成加载失败："+e.message);
+    if(requestId===commissionRequestId)clearCommissionReport("提成加载失败："+e.message);
   }
 }
 
@@ -563,7 +555,7 @@ async function fetchDailyReport(){
   const tbody=document.querySelector("#dailyReportTable tbody");
   tbody.innerHTML='<tr><td colspan="10" class="empty-hint">正在加载...</td></tr>';
   try{
-    const response=await fetch(API.dailyReport+"?date="+encodeURIComponent(date),{headers:{"X-Records-Password":recordsSessionPassword}});
+    const response=await fetch(API.dailyReport+"?date="+encodeURIComponent(date));
     const json=await response.json();
     if(!response.ok||json.code!==0)throw new Error(json.detail||"报表加载失败");
     renderDailyReport(json.data);
@@ -621,7 +613,7 @@ async function fetchMonthlyReport(){
   const tbody=document.querySelector("#monthlyReportTable tbody");
   tbody.innerHTML='<tr><td colspan="10" class="empty-hint">正在加载...</td></tr>';
   try{
-    const response=await fetch(API.monthlyReport+"?month="+encodeURIComponent(month),{headers:{"X-Records-Password":recordsSessionPassword}});
+    const response=await fetch(API.monthlyReport+"?month="+encodeURIComponent(month));
     const json=await response.json();
     if(!response.ok||json.code!==0)throw new Error(json.detail||"月报加载失败");
     renderMonthlyReport(json.data);
@@ -1683,7 +1675,7 @@ function loadStaffCommissionRule(rule){
 function renderStaff(){
   const tb=document.querySelector("#staffTable tbody");
   if(!staffData.length){tb.innerHTML='<tr><td colspan="8" class="empty-hint">&#26242;&#26080;&#24215;&#20869;&#20154;&#21592;</td></tr>';return;}
-  tb.innerHTML=staffData.map(s=>'<tr><td>'+escapeHtml(s.name)+'</td><td>'+escapeHtml(s.phone||'-')+'</td><td>'+escapeHtml(s.position)+'</td><td><span class="status-badge '+(s.status==="\u5728\u804c"?'active':'inactive')+'">'+escapeHtml(s.status)+'</span></td><td class="admin-only" style="display:none;">'+Number(s.salary||0).toFixed(2)+'</td><td class="records-access-only" style="display:none;white-space:pre-line;">'+escapeHtml(staffCommissionText(s.commission_rule))+'</td><td>'+escapeHtml(s.notes||'-')+'</td><td><button class="btn btn-xs btn-outline" onclick="showEditStaffModal('+s.id+')">&#32534;&#36753;</button> <button class="btn btn-xs btn-danger del-btn" style="display:none;" onclick="deleteStaff('+s.id+')">&#21024;&#38500;</button></td></tr>').join("");
+  tb.innerHTML=staffData.map(s=>'<tr><td>'+escapeHtml(s.name)+'</td><td>'+escapeHtml(s.phone||'-')+'</td><td>'+escapeHtml(s.position)+'</td><td><span class="status-badge '+(s.status==="\u5728\u804c"?'active':'inactive')+'">'+escapeHtml(s.status)+'</span></td><td class="admin-only" style="display:none;">'+Number(s.salary||0).toFixed(2)+'</td><td style="white-space:pre-line;">'+escapeHtml(staffCommissionText(s.commission_rule))+'</td><td>'+escapeHtml(s.notes||'-')+'</td><td><button class="btn btn-xs btn-outline" onclick="showEditStaffModal('+s.id+')">&#32534;&#36753;</button> <button class="btn btn-xs btn-danger del-btn" style="display:none;" onclick="deleteStaff('+s.id+')">&#21024;&#38500;</button></td></tr>').join("");
   applyAdminToolsVisibility();
   applyRecordsVisibility();
 }
@@ -1726,12 +1718,10 @@ async function confirmStaff(){
   const staffId=document.getElementById("editStaffId").value;
   const data={name:document.getElementById("staffName").value.trim(),phone:document.getElementById("staffPhone").value.trim()||null,position:document.getElementById("staffPosition").value.trim(),status:document.getElementById("staffStatus").value,notes:document.getElementById("staffNotes").value.trim()||null};
   if(adminToolsVisible)data.salary=parseFloat(document.getElementById("staffSalary").value)||0;
-  if(recordsVisible){
-    const rule=readStaffCommissionRule();
-    if(!Number.isFinite(rule.first_limit)||!Number.isFinite(rule.second_limit)||rule.first_limit<=0||rule.second_limit<=rule.first_limit){alert("第一档上限必须大于0，第二档上限必须大于第一档上限");return;}
-    if([rule.first_rate,rule.second_rate,rule.third_rate,rule.fixed_rate].some(rate=>!Number.isFinite(rate)||rate<0||rate>100)){alert("提成比例必须填写0到100之间的数字");return;}
-    data.commission_rule=rule;
-  }
+  const rule=readStaffCommissionRule();
+  if(!Number.isFinite(rule.first_limit)||!Number.isFinite(rule.second_limit)||rule.first_limit<=0||rule.second_limit<=rule.first_limit){alert("第一档上限必须大于0，第二档上限必须大于第一档上限");return;}
+  if([rule.first_rate,rule.second_rate,rule.third_rate,rule.fixed_rate].some(rate=>!Number.isFinite(rate)||rate<0||rate>100)){alert("提成比例必须填写0到100之间的数字");return;}
+  data.commission_rule=rule;
   if(!data.name||!data.position){alert("\u8bf7\u586b\u5199\u59d3\u540d\u548c\u5c97\u4f4d");return;}
   try{
     const r=await fetch(staffId?API.staff+"/"+staffId:API.staff,{method:staffId?"PUT":"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(data)});
@@ -2278,7 +2268,7 @@ async function fetchBillingHistory(){
 
 async function fetchRechargeLogs(){
   try{
-    const response=await fetch(API.rechargeLogs,{headers:{"X-Records-Password":recordsSessionPassword}}),json=await response.json();
+    const response=await fetch(API.rechargeLogs),json=await response.json();
     if(!response.ok||json.code!==0)throw new Error(json.detail||"充卡记录加载失败");
     rechargeLogsData=(json.data||[]).sort((a,b)=>String(b.business_date||"").localeCompare(String(a.business_date||""))||_historyTimeValue(b.created_at)-_historyTimeValue(a.created_at)||b.id-a.id);
     renderRechargeLogs(rechargeLogsData);

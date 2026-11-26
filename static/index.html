@@ -28,17 +28,17 @@
 
     <div class="sidebar-section-title">收银记账</div>
     <button class="tab-btn" data-tab="checkout"><span class="tab-icon">&#165;</span> 收银台</button>
-    <button class="tab-btn records-access-only" data-tab="reports" style="display:none;"><span class="tab-icon">&#9638;</span> 营业报表</button>
+    <button class="tab-btn" data-tab="reports"><span class="tab-icon">&#9638;</span> 营业报表</button>
     <button class="tab-btn" data-tab="history"><span class="tab-icon">&#9776;</span> 结账记录</button>
-    <button class="tab-btn records-access-only" data-tab="recharges" style="display:none;"><span class="tab-icon">&#165;</span> 充卡记录</button>
+    <button class="tab-btn" data-tab="recharges"><span class="tab-icon">&#165;</span> 充卡记录</button>
 
     <div class="sidebar-section-title">管理</div>
     <button class="tab-btn" data-tab="packages"><span class="tab-icon">&#9636;</span> 套餐管理</button>
     <button class="tab-btn" data-tab="inventory"><span class="tab-icon">&#9635;</span> 库存管理</button>
     <button class="tab-btn" data-tab="staff"><span class="tab-icon">&#9823;</span> 店内人员管理</button>
-    <button class="tab-btn records-access-only" data-tab="commissions" style="display:none;"><span class="tab-icon">&#165;</span> 营销提成</button>
+    <button class="tab-btn" data-tab="commissions"><span class="tab-icon">&#165;</span> 营销提成</button>
 
-    <button class="tab-btn records-access-only" data-tab="logs" style="display:none;"><span class="tab-icon">&#9776;</span> 操作日志</button>
+    <button class="tab-btn operation-logs-access-only" data-tab="logs" style="display:none;"><span class="tab-icon">&#9776;</span> 操作日志</button>
   </div>
   <div class="sidebar-footer">
     <span class="clock" id="clock">--</span>
@@ -295,7 +295,7 @@
     </div>
     <div class="table-wrap">
       <table class="data-table" id="staffTable">
-        <thead><tr><th>&#22995;&#21517;</th><th>&#25163;&#26426;&#21495;</th><th>&#23703;&#20301;</th><th>&#29366;&#24577;</th><th class="admin-only" style="display:none;">基本薪资</th><th class="records-access-only" style="display:none;">提成规则</th><th>&#22791;&#27880;</th><th>&#25805;&#20316;</th></tr></thead>
+        <thead><tr><th>&#22995;&#21517;</th><th>&#25163;&#26426;&#21495;</th><th>&#23703;&#20301;</th><th>&#29366;&#24577;</th><th class="admin-only" style="display:none;">基本薪资</th><th>提成规则</th><th>&#22791;&#27880;</th><th>&#25805;&#20316;</th></tr></thead>
         <tbody><tr><td colspan="8" class="empty-hint">&#26242;&#26080;&#24215;&#20869;&#20154;&#21592;</td></tr></tbody>
       </table>
     </div>
@@ -798,7 +798,7 @@
     <div class="form-group"><label>&#23703;&#20301;</label><input type="text" id="staffPosition" value="&#21592;&#24037;" placeholder="&#20363;&#22914;&#65306;&#24215;&#38271;&#12289;&#25910;&#38134;&#21592;&#12289;&#26381;&#21153;&#21592;"></div>
     <div class="form-group"><label>&#29366;&#24577;</label><select id="staffStatus"><option value="&#22312;&#32844;">&#22312;&#32844;</option><option value="&#31163;&#32844;">&#31163;&#32844;</option></select></div>
     <div class="form-group admin-only" style="display:none;"><label>&#24037;&#36164;&#65288;&#20803;/&#26376;&#65289;</label><input type="number" id="staffSalary" value="0" min="0" step="0.01"><small style="color:var(--text-dim);">Ctrl+/ &#26174;&#31034;&#25110;&#38544;&#34255;</small></div>
-    <div class="records-access-only" style="display:none;">
+    <div>
       <div class="form-group"><label>提成类型</label><select id="staffCommissionType" onchange="updateStaffCommissionFields()"><option value="none">不计算提成</option><option value="marketing">营销人员 · 阶梯分段</option><option value="manager">经理 · 固定比例</option></select></div>
       <div id="staffMarketingRule" hidden>
         <div class="form-group"><label>第一档业绩上限（元）</label><input id="staffFirstLimit" type="number" min="0.01" step="0.01" value="10000" oninput="updateStaffCommissionFields()"></div>
@@ -868,8 +868,8 @@
 
 <div class="modal-overlay" id="recordsAccessModal">
   <div class="modal">
-    <h3>验证记录查看密码</h3>
-    <p style="font-size:13px;color:var(--text-dim);margin-bottom:14px;">验证通过后，本次页面会话中显示营业报表、充卡记录和操作日志。</p>
+    <h3>验证操作日志查看密码</h3>
+    <p style="font-size:13px;color:var(--text-dim);margin-bottom:14px;">验证通过后，本次页面会话中显示操作日志。</p>
     <div class="form-group"><label>记录查看密码</label><input type="password" id="recordsAccessPassword" autocomplete="current-password"></div>
     <div class="modal-actions">
       <button class="btn btn-secondary" onclick="closeModal('recordsAccessModal')">取消</button>

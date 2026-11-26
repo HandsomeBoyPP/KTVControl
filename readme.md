@@ -49,7 +49,7 @@
 3. 再按 `Ctrl+/` 可退出管理员模式并重新隐藏敏感内容。
 4. 手动修改库存数量时，无论管理员模式是否已打开，都需要再次输入管理密码确认。
 
-5. 营业报表、充卡记录和操作日志默认隐藏，按 `Ctrl+\` 输入记录查看密码后统一显示，再按一次重新隐藏。
+5. 只有操作日志默认隐藏；按 `Ctrl+\` 输入记录查看密码后显示，再按一次重新隐藏。营业报表、充卡记录、营销提成和人员提成规则始终显示。
 6. 按 `Ctrl+Alt+D` 输入日志删除密码后，操作日志显示逐条删除按钮；再次按下会退出删除模式。
 
 > 默认管理密码为 `admin123456`，默认记录查看密码为 `records123`，默认库存修改密码为 `muyin888`，默认日志删除密码为 `Peng0524`。这些密码都保存在 `data/config.json`，正式使用前可分别修改。
@@ -156,7 +156,8 @@ KTV_API_BASE = "http://192.168.110.201:18888"
 | 账单 | `POST /api/billing/settle`、`GET /api/billing/history` | 结账和结账记录 |
 | 账单 | `DELETE /api/billing/{id}` | 删除账单（当前实现，后续计划改为作废/冲正） |
 | 管理 | `POST /api/admin/verify`、`POST /api/records/verify`、`POST /api/log-delete/verify` | 三套独立密码验证 |
-| 记录 | `GET /api/reports/daily`、`GET /api/recharge-logs`、`GET /api/operation-logs` | 受记录查看密码保护的敏感记录 |
+| 记录 | `GET /api/reports/daily`、`GET /api/reports/monthly`、`GET /api/reports/commissions`、`GET /api/recharge-logs` | 直接查看营业、提成和充卡记录 |
+| 记录 | `GET /api/operation-logs` | 使用记录查看密码查看操作日志 |
 | 记录 | `DELETE /api/operation-logs/{id}` | 使用日志删除密码逐条删除操作日志 |
 
 ## 主要数据表
