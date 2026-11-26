@@ -126,6 +126,15 @@ def _month_bounds(year: int, month: int) -> tuple[str, str, str, str]:
     )
 
 
+def _calendar_month_bounds(year: int, month: int) -> tuple[str, str]:
+    start = datetime(year, month, 1)
+    if month == 12:
+        end = datetime(year + 1, 1, 1)
+    else:
+        end = datetime(year, month + 1, 1)
+    return start.strftime("%Y-%m-%d %H:%M:%S"), end.strftime("%Y-%m-%d %H:%M:%S")
+
+
 def _tagged_month_counts(conn: sqlite3.Connection, year: int, month: int) -> dict[str, int]:
     start_at, end_at, start_date, end_date = _month_bounds(year, month)
     return {
@@ -318,35 +327,29 @@ def seed(year: int, month: int, billing_total: int, replace: bool) -> dict:
             )
         removed = _remove_tagged_month(conn, year, month) if any(existing.values()) else {}
 
-        start_at, _, start_date, _ = _month_bounds(year, month)
-        has_prior_activity = bool(conn.execute(
-            """SELECT
-                 EXISTS(SELECT 1 FROM billing_records
-                        WHERE data_tag = ? AND open_at < ?)
-                 OR EXISTS(SELECT 1 FROM recharge_logs
-                           WHERE data_tag = ? AND business_date < ?)""",
-            (DATA_TAG, start_at, DATA_TAG, start_date),
-        ).fetchone()[0])
-
+        member_start, member_end = _calendar_month_bounds(year, month)
         members = [dict(row) for row in conn.execute(
             """SELECT id, name, phone, balance, created_at FROM members
-               WHERE data_tag = ? ORDER BY id LIMIT 36""",
-            (DATA_TAG,),
+               WHERE data_tag = ? AND created_at >= ? AND created_at < ?
+               ORDER BY created_at, id LIMIT 36""",
+            (DATA_TAG, member_start, member_end),
         ).fetchall()]
-        for index, member in enumerate(members):
-            if not has_prior_activity:
-                created_at = _member_created_at(rng, year, month)
-                conn.execute(
-                    "UPDATE members SET created_at = ? WHERE id = ? AND data_tag = ?",
-                    (created_at.strftime("%Y-%m-%d %H:%M:%S"), member["id"], DATA_TAG),
-                )
-                member["created_at"] = created_at.strftime("%Y-%m-%d %H:%M:%S")
+        for member in members:
             member["created_at_dt"] = datetime.fromisoformat(member["created_at"])
             member["balance"] = float(member["balance"] or 0)
             member["recharged"] = False
+
+        used_phones = {
+            str(row[0]) for row in conn.execute("SELECT phone FROM members").fetchall()
+        }
+        phone_index = 0
         for index in range(len(members), 36):
             surname = SURNAMES[index]
-            phone = _phone(index)
+            while _phone(phone_index) in used_phones:
+                phone_index += 1
+            phone = _phone(phone_index)
+            used_phones.add(phone)
+            phone_index += 1
             created_at = _member_created_at(rng, year, month)
             opening_balance = 0 if index < len(RECHARGE_PLANS) else rng.choice((1000, 1500, 2000, 3000))
             cursor = conn.execute(
@@ -437,7 +440,7 @@ def seed(year: int, month: int, billing_total: int, replace: bool) -> dict:
             member = None
             balance_after = None
             eligible_members = [
-                item for item in members if item["created_at_dt"] <= event["time"]
+                item for item in members if item["created_at_dt"] <= event["open_time"]
             ]
             if method == "会员余额":
                 candidates = [item for item in eligible_members if item["balance"] >= amount]
