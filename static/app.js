@@ -1095,23 +1095,21 @@ async function cancelBooking(id){if(!confirm("确认取消预订？"))return;try
 
 
 
-async function fetchMembers(){try{const r=await fetch(API.members);const j=await r.json();if(j.code===0){membersData=j.data||[];renderMembers();}}catch(e){}}
+function memberCreatedTime(value){
+  const parts=String(value||"").match(/\d+/g)||[];
+  if(parts.length<3)return 0;
+  const normalized=[parts[0].padStart(4,"0"),...parts.slice(1,6).map(part=>part.padStart(2,"0"))];
+  while(normalized.length<6)normalized.push("00");
+  return Number(normalized.join(""));
+}
+
+async function fetchMembers(){try{const r=await fetch(API.members);const j=await r.json();if(j.code===0){membersData=(j.data||[]).sort((a,b)=>memberCreatedTime(b.created_at)-memberCreatedTime(a.created_at));renderMembers();}}catch(e){}}
 
 
 
 function renderMembers(){
   const tb=document.querySelector("#membersTable tbody");
   if(!membersData.length){tb.innerHTML='<tr><td colspan="6" class="empty-hint">暂无会员数据</td></tr>';return;}
-  const memberCreatedTime=value=>{
-    const parts=String(value||"").match(/\d+/g)||[];
-    if(parts.length<3)return 0;
-    const normalized=[parts[0].padStart(4,"0"),...parts.slice(1,6).map(part=>part.padStart(2,"0"))];
-    while(normalized.length<6)normalized.push("00");
-    return Number(normalized.join(""));
-  };
-  membersData.sort((a,b)=>{
-    return memberCreatedTime(b.created_at)-memberCreatedTime(a.created_at);
-  });
   tb.innerHTML=membersData.map(m=>{
     const cr=m.created_at?m.created_at.replace("T"," ").substring(0,19):"-";
     return '<tr><td>'+escapeHtml(m.name)+'</td><td>'+escapeHtml(m.phone)+'</td><td>'+escapeHtml(m.remark||"-")+'</td><td>'+Number(m.balance||0).toFixed(2)+'</td><td style="font-size:12px;color:var(--text-dim);">'+cr+'</td><td><button class="btn btn-xs btn-accent" onclick="showRechargeModal('+m.id+')">充值</button> <button class="btn btn-xs btn-outline" onclick="showStoredDrinksModal('+m.id+')">存酒</button> <button class="btn btn-xs btn-outline" onclick="showEditMemberModal('+m.id+')">编辑</button> <button class="btn btn-xs btn-secondary" onclick="showResetPwdModal('+m.id+')">重置密码</button></td></tr>';
